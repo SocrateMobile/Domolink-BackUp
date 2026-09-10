@@ -1,0 +1,19 @@
+{
+  "domain": "domolink_backup",
+  "name": "DomoLink-BachUp",
+  "codeowners": [
+    "@SocrateMobile"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "backup",
+    "frontend",
+    "http"
+  ],
+  "documentation": "https://github.com/SocrateMobile/Domolink-BackUp",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/SocrateMobile/Domolink-BackUp/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}

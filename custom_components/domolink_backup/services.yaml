@@ -1,0 +1,40 @@
+create_backup:
+  name: Créer et téléverser une sauvegarde
+  description: Déclenche la création d'une sauvegarde Home Assistant et la téléverse immédiatement vers votre destination distante DomoLink-BachUp (NAS, WebDAV, Google Drive, Partage Réseau).
+  fields:
+    name:
+      name: Nom de la sauvegarde
+      description: Nom personnalisé pour la sauvegarde (optionnel).
+      example: "Sauvegarde Hebdo"
+      selector:
+        text:
+    include_database:
+      name: Inclure la base de données
+      description: Inclure la base de données de l'historique (Recorder) dans l'archive.
+      default: true
+      selector:
+        boolean:
+
+upload_backup:
+  name: Téléverser un fichier de sauvegarde
+  description: Téléverse un fichier d'archive (.tar) existant depuis Home Assistant vers la destination distante configurée.
+  fields:
+    file_path:
+      name: Chemin du fichier
+      description: Chemin absolu vers le fichier d'archive à envoyer (ex: /backup/mon_archive.tar).
+      required: true
+      example: "/backup/583920fa.tar"
+      selector:
+        text:
+
+test_connection:
+  name: Tester la connexion au stockage
+  description: Exécute un diagnostic complet de connexion et vérifie les permissions d'écriture sur le serveur distant (FTP, WebDAV, Google Drive ou Partage Local).
+
+clean_old_backups:
+  name: Nettoyer selon la rétention (Purge FIFO)
+  description: Analyse les sauvegardes distantes et supprime les archives les plus anciennes dépassant vos règles de quotas (nombre max, âge max en jours, taille max en Mo).
+
+sync_backups:
+  name: Synchroniser les sauvegardes
+  description: Interroge le serveur distant pour mettre à jour la liste des sauvegardes, l'espace utilisé et les capteurs d'état.

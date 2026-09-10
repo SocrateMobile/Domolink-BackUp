@@ -1,0 +1,115 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configuration de DomoLink-BachUp (1/4)",
+        "description": "Sélectionnez votre profil de stockage ou NAS ainsi que le protocole de transfert souhaité.",
+        "data": {
+          "name": "Nom de l'intégration",
+          "nas_type": "Profil NAS / Destination",
+          "protocol": "Protocole de transfert"
+        }
+      },
+      "credentials": {
+        "title": "Paramètres de connexion (2/4)",
+        "description": "Renseignez les accès réseau pour votre cible de sauvegarde. Les ports et chemins par défaut ont été pré-remplis selon votre profil.",
+        "data": {
+          "ftp_host": "Hôte ou IP du serveur FTP",
+          "ftp_port": "Port FTP (défaut: 21)",
+          "ftp_user": "Nom d'utilisateur FTP",
+          "ftp_pass": "Mot de passe FTP",
+          "ftp_path": "Chemin distant du dossier de sauvegarde",
+          "ftp_tls": "Activer le chiffrement TLS (FTPS)",
+          "webdav_url": "URL du serveur WebDAV (ex: https://192.168.1.100:5006)",
+          "webdav_user": "Nom d'utilisateur WebDAV",
+          "webdav_pass": "Mot de passe WebDAV",
+          "webdav_path": "Chemin de la collection distante",
+          "webdav_verify_ssl": "Vérifier le certificat SSL WebDAV",
+          "google_drive_webhook_url": "URL du Webhook Google Apps Script",
+          "google_drive_folder_id": "ID du dossier Google Drive (optionnel)",
+          "local_share_path": "Chemin absolu du dossier local ou partagé"
+        }
+      },
+      "retention": {
+        "title": "Politique de rétention et quotas (3/4)",
+        "description": "Définissez les règles de rotation automatique (FIFO) pour vos sauvegardes distantes.",
+        "data": {
+          "max_backups_count": "Nombre maximum de sauvegardes à conserver",
+          "retention_days": "Rétention maximale en jours",
+          "max_storage_mb": "Espace de stockage maximal alloué (en Mo)",
+          "auto_clean_enabled": "Activer le nettoyage automatique (purge FIFO)"
+        }
+      },
+      "telegram": {
+        "title": "Alertes et notifications Telegram (4/4)",
+        "description": "Recevez en temps réel le compte-rendu de vos sauvegardes par Telegram (optionnel).",
+        "data": {
+          "telegram_enabled": "Activer les alertes Telegram",
+          "telegram_token": "Jeton du Bot Telegram (Token)",
+          "telegram_chat_id": "Chat ID Telegram",
+          "telegram_notify_on_start": "Notifier au démarrage de la sauvegarde",
+          "telegram_notify_on_success": "Notifier en cas de succès",
+          "telegram_notify_on_error": "Notifier en cas d'erreur"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Échec de connexion au serveur distant",
+      "invalid_auth": "Identifiants invalides",
+      "unknown": "Erreur inattendue"
+    },
+    "abort": {
+      "already_configured": "Cet appareil est déjà configuré."
+    }
+  },
+  "options": {
+    "step": {
+      "destination": {
+        "title": "Modifier la destination de sauvegarde",
+        "data": {
+          "nas_type": "Profil NAS / Destination",
+          "protocol": "Protocole de transfert"
+        }
+      },
+      "credentials": {
+        "title": "Paramètres de connexion",
+        "data": {
+          "ftp_host": "Hôte ou IP du serveur FTP",
+          "ftp_port": "Port FTP",
+          "ftp_user": "Nom d'utilisateur FTP",
+          "ftp_pass": "Mot de passe FTP",
+          "ftp_path": "Chemin distant",
+          "ftp_tls": "Activer TLS (FTPS)",
+          "webdav_url": "URL du serveur WebDAV",
+          "webdav_user": "Nom d'utilisateur WebDAV",
+          "webdav_pass": "Mot de passe WebDAV",
+          "webdav_path": "Chemin distant",
+          "webdav_verify_ssl": "Vérifier le certificat SSL",
+          "google_drive_webhook_url": "URL Webhook Google Apps Script",
+          "google_drive_folder_id": "ID du dossier Google Drive",
+          "local_share_path": "Chemin du dossier local / montage"
+        }
+      },
+      "retention": {
+        "title": "Quotas et rétention",
+        "data": {
+          "max_backups_count": "Nombre maximum de sauvegardes",
+          "retention_days": "Rétention maximale (jours)",
+          "max_storage_mb": "Espace maximal (Mo)",
+          "auto_clean_enabled": "Nettoyage automatique"
+        }
+      },
+      "telegram": {
+        "title": "Notifications Telegram",
+        "data": {
+          "telegram_enabled": "Activer Telegram",
+          "telegram_token": "Token Bot",
+          "telegram_chat_id": "Chat ID",
+          "telegram_notify_on_start": "Alerte démarrage",
+          "telegram_notify_on_success": "Alerte succès",
+          "telegram_notify_on_error": "Alerte échec"
+        }
+      }
+    }
+  }
+}
