@@ -1,4 +1,4 @@
-"""DomoLink-BachUp integration for Home Assistant.
+"""DomoLink-BackUp integration for Home Assistant.
 
 Provides remote off-site backup storage (NAS, FTP/FTPS, WebDAV, Google Drive, Local share),
 native Home Assistant BackupAgent registration, custom sensors, buttons, and a dedicated
@@ -88,7 +88,7 @@ if HAS_BACKUP_AGENT:
 
 
 class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    """Coordinator managing DomoLink-BachUp state, tasks and synchronization."""
+    """Coordinator managing DomoLink-BackUp state, tasks and synchronization."""
 
     def __init__(
         self,
@@ -196,7 +196,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.async_set_updated_data(self.data)
             return backups
         except Exception as err:
-            _LOGGER.warning("DomoLink-BachUp: Échec rafraîchissement des sauvegardes distantes: %s", err)
+            _LOGGER.warning("DomoLink-BackUp: Échec rafraîchissement des sauvegardes distantes: %s", err)
             return []
 
     async def async_run_test_connection(self) -> dict[str, Any]:
@@ -221,10 +221,10 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> bool:
         """Create a Home Assistant backup archive and upload it to remote storage."""
         if self.data.get("is_busy"):
-            _LOGGER.warning("DomoLink-BachUp: Une opération de sauvegarde est déjà en cours.")
+            _LOGGER.warning("DomoLink-BackUp: Une opération de sauvegarde est déjà en cours.")
             return False
 
-        backup_title = name or f"DomoLink-BachUp_{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
+        backup_title = name or f"DomoLink-BackUp_{datetime.now().strftime('%Y-%m-%d_%H-%M')}"
         dest_label = self.storage_engine.destination_label
         start_time = time.monotonic()
 
@@ -255,9 +255,9 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 elif self.hass.services.has_service("hassio", "backup_full"):
                     await self.hass.services.async_call("hassio", "backup_full", {"name": backup_title}, blocking=True)
                 else:
-                    _LOGGER.warning("DomoLink-BachUp: Aucun service de sauvegarde standard trouvé dans Home Assistant.")
+                    _LOGGER.warning("DomoLink-BackUp: Aucun service de sauvegarde standard trouvé dans Home Assistant.")
             except Exception as srv_err:
-                _LOGGER.warning("DomoLink-BachUp: Tentative d'appel du service de sauvegarde HA: %s", srv_err)
+                _LOGGER.warning("DomoLink-BackUp: Tentative d'appel du service de sauvegarde HA: %s", srv_err)
 
             # Wait a moment for file to finalize
             await asyncio.sleep(2)
@@ -312,7 +312,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return False
 
         except Exception as err:
-            _LOGGER.exception("DomoLink-BachUp: Erreur pendant la sauvegarde: %s", err)
+            _LOGGER.exception("DomoLink-BackUp: Erreur pendant la sauvegarde: %s", err)
             self.set_status(STATE_ERROR, f"Erreur : {err}", is_busy=False, error=str(err))
             await self.notifier.async_notify_error(backup_title, dest_label, str(err))
             return False
@@ -320,7 +320,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_upload_file(self, file_path: str) -> bool:
         """Upload an existing tar archive file to remote destination."""
         if not os.path.exists(file_path):
-            _LOGGER.error("DomoLink-BachUp: Le fichier spécifié n'existe pas : %s", file_path)
+            _LOGGER.error("DomoLink-BackUp: Le fichier spécifié n'existe pas : %s", file_path)
             return False
 
         filename = os.path.basename(file_path)
@@ -380,7 +380,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up DomoLink-BachUp from a config entry."""
+    """Set up DomoLink-BackUp from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
     config = {**entry.data, **entry.options}
@@ -424,7 +424,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             frontend.async_register_built_in_panel(
                 hass,
                 component_name="custom",
-                sidebar_title=NAME,  # "DomoLink-BachUp" as requested!
+                sidebar_title=NAME,  # "DomoLink-BackUp" as requested!
                 sidebar_icon="mdi:archive-arrow-up",
                 frontend_url_path="domolink_backup",
                 config={
@@ -435,7 +435,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 },
                 require_admin=False,
             )
-            _LOGGER.info("DomoLink-BachUp: Panneau latéral enregistré avec le titre '%s'", NAME)
+            _LOGGER.info("DomoLink-BackUp: Panneau latéral enregistré avec le titre '%s'", NAME)
         except ValueError:
             # Panel already registered
             pass

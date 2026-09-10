@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "Configuration de DomoLink-BachUp (1/4)",
+        "title": "Configuration de DomoLink-BackUp (1/4)",
         "description": "Sélectionnez votre profil de stockage ou NAS ainsi que le protocole de transfert souhaité.",
         "data": {
           "name": "Nom de l'intégration",

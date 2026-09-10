@@ -1,4 +1,4 @@
-"""Storage Engine for DomoLink-BachUp.
+"""Storage Engine for DomoLink-BackUp.
 
 Supports multi-destination backup operations:
 - FTP & FTPS (TLS)
@@ -73,7 +73,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class DomoLinkStorageEngine:
-    """Multi-destination storage manager for DomoLink-BachUp."""
+    """Multi-destination storage manager for DomoLink-BackUp."""
 
     def __init__(self, hass: HomeAssistant, config: dict[str, Any]) -> None:
         """Initialize the storage engine with integration config."""
@@ -147,7 +147,7 @@ class DomoLinkStorageEngine:
                     "message": f"Protocole {proto} non pris en charge.",
                 }
         except Exception as err:
-            _LOGGER.exception("DomoLink-BachUp: Erreur inattendue pendant le test de connexion: %s", err)
+            _LOGGER.exception("DomoLink-BackUp: Erreur inattendue pendant le test de connexion: %s", err)
             res = {
                 "success": False,
                 "code": 500,
@@ -216,7 +216,7 @@ class DomoLinkStorageEngine:
 
                 # Write probe file
                 probe_filename = f"domolink_probe_{int(time.time())}.txt"
-                probe_data = io.BytesIO(b"DomoLink-BachUp Probe Test OK")
+                probe_data = io.BytesIO(b"DomoLink-BackUp Probe Test OK")
                 ftp.storbinary(f"STOR {probe_filename}", probe_data)
 
                 # Clean probe file
@@ -307,7 +307,7 @@ class DomoLinkStorageEngine:
             probe_url = f"{cur_url}/{probe_filename}"
             async with session.put(
                 probe_url,
-                data=b"DomoLink-BachUp WebDAV Probe OK",
+                data=b"DomoLink-BackUp WebDAV Probe OK",
                 headers={"Content-Type": "text/plain"},
                 auth=auth,
                 timeout=aiohttp.ClientTimeout(total=10),
@@ -386,7 +386,7 @@ class DomoLinkStorageEngine:
                 os.makedirs(path, exist_ok=True)
                 probe_file = os.path.join(path, f"domolink_probe_{int(time.time())}.txt")
                 with open(probe_file, "w") as f:
-                    f.write("DomoLink-BachUp Probe OK")
+                    f.write("DomoLink-BackUp Probe OK")
                 if os.path.exists(probe_file):
                     os.remove(probe_file)
                 total, used, free = shutil.disk_usage(path)
@@ -415,7 +415,7 @@ class DomoLinkStorageEngine:
     ) -> bool:
         """Upload a backup archive to the configured destination."""
         proto = self.protocol
-        _LOGGER.info("DomoLink-BachUp: Début de l'envoi de '%s' via %s (taille: %s octets)", filename, proto.upper(), size)
+        _LOGGER.info("DomoLink-BackUp: Début de l'envoi de '%s' via %s (taille: %s octets)", filename, proto.upper(), size)
 
         # If source is an async stream factory, convert or buffer as needed
         file_path = None
@@ -452,7 +452,7 @@ class DomoLinkStorageEngine:
             elif proto == PROTO_LOCAL_SHARE:
                 success = await self._async_upload_local_share(file_path, filename, on_progress)
             else:
-                _LOGGER.error("DomoLink-BachUp: Protocole '%s' non pris en charge pour l'envoi", proto)
+                _LOGGER.error("DomoLink-BackUp: Protocole '%s' non pris en charge pour l'envoi", proto)
                 success = False
 
             if success and self.config.get(CONF_AUTO_CLEAN_ENABLED, True):
@@ -520,7 +520,7 @@ class DomoLinkStorageEngine:
                 ftp.quit()
                 return True
             except Exception as err:
-                _LOGGER.error("DomoLink-BachUp: Échec envoi FTP de %s : %s", filename, err)
+                _LOGGER.error("DomoLink-BackUp: Échec envoi FTP de %s : %s", filename, err)
                 return False
             finally:
                 if ftp:
@@ -586,13 +586,13 @@ class DomoLinkStorageEngine:
                 timeout=aiohttp.ClientTimeout(total=3600),
             ) as resp:
                 if resp.status in (200, 201, 204):
-                    _LOGGER.info("DomoLink-BachUp: Sauvegarde %s téléversée sur WebDAV avec succès", filename)
+                    _LOGGER.info("DomoLink-BackUp: Sauvegarde %s téléversée sur WebDAV avec succès", filename)
                     return True
                 else:
-                    _LOGGER.error("DomoLink-BachUp: Échec WebDAV (HTTP %s) lors de l'envoi de %s", resp.status, filename)
+                    _LOGGER.error("DomoLink-BackUp: Échec WebDAV (HTTP %s) lors de l'envoi de %s", resp.status, filename)
                     return False
         except Exception as err:
-            _LOGGER.error("DomoLink-BachUp: Erreur envoi WebDAV %s : %s", filename, err)
+            _LOGGER.error("DomoLink-BackUp: Erreur envoi WebDAV %s : %s", filename, err)
             return False
 
     # ─── Google Drive Upload ───
@@ -603,7 +603,7 @@ class DomoLinkStorageEngine:
         folder_id = cfg.get(CONF_GOOGLE_DRIVE_FOLDER_ID, "").strip()
 
         if not webhook_url:
-            _LOGGER.error("DomoLink-BachUp: URL Webhook Google Drive non renseignée")
+            _LOGGER.error("DomoLink-BackUp: URL Webhook Google Drive non renseignée")
             return False
 
         def _read_and_encode():
@@ -626,16 +626,16 @@ class DomoLinkStorageEngine:
                 if resp.status == 200:
                     data = await resp.json(content_type=None)
                     if data.get("success"):
-                        _LOGGER.info("DomoLink-BachUp: Sauvegarde %s envoyée sur Google Drive avec succès", filename)
+                        _LOGGER.info("DomoLink-BackUp: Sauvegarde %s envoyée sur Google Drive avec succès", filename)
                         return True
                     else:
-                        _LOGGER.error("DomoLink-BachUp: Réponse négative Google Drive: %s", data.get("message"))
+                        _LOGGER.error("DomoLink-BackUp: Réponse négative Google Drive: %s", data.get("message"))
                         return False
                 else:
-                    _LOGGER.error("DomoLink-BachUp: Erreur HTTP %s lors de l'envoi Google Drive", resp.status)
+                    _LOGGER.error("DomoLink-BackUp: Erreur HTTP %s lors de l'envoi Google Drive", resp.status)
                     return False
         except Exception as err:
-            _LOGGER.error("DomoLink-BachUp: Erreur lors de l'envoi Google Drive : %s", err)
+            _LOGGER.error("DomoLink-BackUp: Erreur lors de l'envoi Google Drive : %s", err)
             return False
 
     # ─── Local / Mounted Share Upload ───
@@ -663,7 +663,7 @@ class DomoLinkStorageEngine:
                                 pass
                 return True
             except Exception as err:
-                _LOGGER.error("DomoLink-BachUp: Échec copie locale %s : %s", filename, err)
+                _LOGGER.error("DomoLink-BackUp: Échec copie locale %s : %s", filename, err)
                 return False
 
         return await self.hass.async_add_executor_job(_sync_copy)
@@ -686,7 +686,7 @@ class DomoLinkStorageEngine:
                 return await self._async_list_local_share()
             return []
         except Exception as err:
-            _LOGGER.error("DomoLink-BachUp: Erreur lors du listing des sauvegardes distantes : %s", err)
+            _LOGGER.error("DomoLink-BackUp: Erreur lors du listing des sauvegardes distantes : %s", err)
             return []
 
     # ─── FTP List ───
@@ -758,7 +758,7 @@ class DomoLinkStorageEngine:
                 ftp.quit()
                 return items
             except Exception as e:
-                _LOGGER.error("DomoLink-BachUp: Erreur listing FTP : %s", e)
+                _LOGGER.error("DomoLink-BackUp: Erreur listing FTP : %s", e)
                 return []
             finally:
                 if ftp:
@@ -832,11 +832,11 @@ class DomoLinkStorageEngine:
                         "protocol": "webdav",
                     })
             except Exception as xml_err:
-                _LOGGER.warning("DomoLink-BachUp: Erreur parsing XML WebDAV: %s", xml_err)
+                _LOGGER.warning("DomoLink-BackUp: Erreur parsing XML WebDAV: %s", xml_err)
 
             return items
         except Exception as err:
-            _LOGGER.error("DomoLink-BachUp: Erreur listing WebDAV : %s", err)
+            _LOGGER.error("DomoLink-BackUp: Erreur listing WebDAV : %s", err)
             return []
 
     # ─── Google Drive List ───
@@ -870,7 +870,7 @@ class DomoLinkStorageEngine:
                     return result
             return []
         except Exception as err:
-            _LOGGER.error("DomoLink-BachUp: Erreur listing Google Drive: %s", err)
+            _LOGGER.error("DomoLink-BackUp: Erreur listing Google Drive: %s", err)
             return []
 
     # ─── Local Share List ───
@@ -1008,7 +1008,7 @@ class DomoLinkStorageEngine:
         target = next((b for b in backups if b["backup_id"] == backup_id or b["filename"] == backup_id), None)
         filename = target["filename"] if target else f"{backup_id}.tar"
 
-        _LOGGER.info("DomoLink-BachUp: Suppression de la sauvegarde distante %s (ID: %s)", filename, backup_id)
+        _LOGGER.info("DomoLink-BackUp: Suppression de la sauvegarde distante %s (ID: %s)", filename, backup_id)
 
         if proto in (PROTO_FTP, PROTO_FTPS, PROTO_SFTP):
             return await self._async_delete_ftp(filename)
@@ -1047,7 +1047,7 @@ class DomoLinkStorageEngine:
                 ftp.quit()
                 return True
             except Exception as e:
-                _LOGGER.error("DomoLink-BachUp: Erreur suppression FTP %s: %s", filename, e)
+                _LOGGER.error("DomoLink-BackUp: Erreur suppression FTP %s: %s", filename, e)
                 return False
             finally:
                 if ftp:
@@ -1074,7 +1074,7 @@ class DomoLinkStorageEngine:
             async with session.delete(file_url, auth=auth, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                 return resp.status in (200, 204)
         except Exception as e:
-            _LOGGER.error("DomoLink-BachUp: Erreur suppression WebDAV %s : %s", filename, e)
+            _LOGGER.error("DomoLink-BackUp: Erreur suppression WebDAV %s : %s", filename, e)
             return False
 
     async def _async_delete_google_drive(self, file_id: str) -> bool:
@@ -1090,7 +1090,7 @@ class DomoLinkStorageEngine:
                     return bool(data.get("success"))
             return False
         except Exception as e:
-            _LOGGER.error("DomoLink-BachUp: Erreur suppression Google Drive : %s", e)
+            _LOGGER.error("DomoLink-BackUp: Erreur suppression Google Drive : %s", e)
             return False
 
     async def _async_delete_local_share(self, filename: str) -> bool:
@@ -1104,7 +1104,7 @@ class DomoLinkStorageEngine:
                     return True
                 return False
             except Exception as e:
-                _LOGGER.error("DomoLink-BachUp: Erreur suppression locale %s: %s", filename, e)
+                _LOGGER.error("DomoLink-BackUp: Erreur suppression locale %s: %s", filename, e)
                 return False
 
         return await self.hass.async_add_executor_job(_sync_del)
@@ -1167,7 +1167,7 @@ class DomoLinkStorageEngine:
             success = await self.async_delete_backup(b.get("backup_id") or b.get("filename"))
             if success:
                 deleted_count += 1
-                _LOGGER.info("DomoLink-BachUp: Purge automatique (rétention) de l'ancienne sauvegarde : %s", b.get("name"))
+                _LOGGER.info("DomoLink-BackUp: Purge automatique (rétention) de l'ancienne sauvegarde : %s", b.get("name"))
 
         remaining_backups = [b for b in sorted_backups if b not in to_delete]
         remaining_size_mb = round(sum(b.get("size", 0) for b in remaining_backups) / (1024 * 1024), 2)

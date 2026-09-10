@@ -1,4 +1,4 @@
-"""Notification Engine for DomoLink-BachUp.
+"""Notification Engine for DomoLink-BackUp.
 
 Handles Telegram alerts and Home Assistant persistent notifications.
 """
@@ -138,7 +138,7 @@ class DomoLinkNotifier:
             f"• <b>Fichier</b> : <code>{backup_name}</code>\n"
             f"• <b>Destination</b> : {destination}\n"
             f"• <b>Erreur</b> : {error_message}{code_str}\n\n"
-            f"🔧 <i>Vérifiez vos paramètres réseau ou vos identifiants dans le panneau DomoLink-BachUp.</i>"
+            f"🔧 <i>Vérifiez vos paramètres réseau ou vos identifiants dans le panneau DomoLink-BackUp.</i>"
         )
         await self._send_telegram(msg)
 
@@ -164,8 +164,8 @@ class DomoLinkNotifier:
                 if resp.status == 200:
                     return True
                 else:
-                    _LOGGER.warning("DomoLink-BachUp: Échec envoi Telegram (HTTP %s)", resp.status)
+                    _LOGGER.warning("DomoLink-BackUp: Échec envoi Telegram (HTTP %s)", resp.status)
                     return False
         except Exception as err:
-            _LOGGER.warning("DomoLink-BachUp: Erreur lors de l'envoi Telegram : %s", err)
+            _LOGGER.warning("DomoLink-BackUp: Erreur lors de l'envoi Telegram : %s", err)
             return False
