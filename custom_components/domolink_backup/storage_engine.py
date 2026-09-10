@@ -72,6 +72,95 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+class _ReusedSslSocket(ssl.SSLSocket):
+    """SSL socket wrapper to prevent unwrap on reused TLS data sessions."""
+
+    def unwrap(self):
+        pass
+
+
+class ReusedSessionFTP_TLS(ftplib.FTP_TLS):
+    """Explicit FTPS client that reuses the TLS session on data connections.
+
+    Required by Freebox, Synology, TrueNAS, vsftpd, Pure-FTPd, ProFTPD
+    which enforce 'require_ssl_reuse=YES' on secure data channels.
+    """
+
+    def ntransfercmd(self, cmd, rest=None):
+        conn, size = ftplib.FTP.ntransfercmd(self, cmd, rest)
+        if self._prot_p:
+            session = getattr(self.sock, "session", None)
+            conn = self.context.wrap_socket(
+                conn,
+                server_hostname=self.host,
+                session=session,
+            )
+            conn.__class__ = _ReusedSslSocket
+        return conn, size
+
+
+def _get_ftp_connection(
+    host: str,
+    port: int,
+    user: str,
+    passwd: str,
+    use_tls: bool,
+    timeout: int = 30,
+) -> ftplib.FTP | ReusedSessionFTP_TLS:
+    """Create and authenticate a configured FTP or FTPS connection."""
+    if use_tls:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        ftp = ReusedSessionFTP_TLS(context=ctx, timeout=timeout)
+        ftp.connect(host, port)
+        ftp.auth()
+        ftp.prot_p()
+    else:
+        ftp = ftplib.FTP(timeout=timeout)
+        ftp.connect(host, port)
+
+    ftp.login(user, passwd)
+    ftp.set_pasv(True)
+    return ftp
+
+
+def _ftp_ensure_dir(ftp: ftplib.FTP | ReusedSessionFTP_TLS, path: str) -> None:
+    """Ensure directory exists on the FTP server and navigate into it."""
+    clean_path = path.strip()
+    if not clean_path or clean_path == "/":
+        try:
+            ftp.cwd("/")
+        except Exception:
+            pass
+        return
+
+    # Fast path: try direct cwd
+    try:
+        ftp.cwd(clean_path)
+        return
+    except Exception:
+        pass
+
+    # Stepwise traversal and creation
+    if clean_path.startswith("/"):
+        try:
+            ftp.cwd("/")
+        except Exception:
+            pass
+
+    parts = [p for p in clean_path.split("/") if p]
+    for part in parts:
+        try:
+            ftp.cwd(part)
+        except Exception:
+            try:
+                ftp.mkd(part)
+                ftp.cwd(part)
+            except Exception:
+                ftp.cwd(part)
+
+
 class DomoLinkStorageEngine:
     """Multi-destination storage manager for DomoLink-BackUp."""
 
@@ -190,29 +279,8 @@ class DomoLinkStorageEngine:
         def _sync_ftp_test():
             ftp = None
             try:
-                if use_tls:
-                    ftp = ftplib.FTP_TLS(timeout=10)
-                    ftp.connect(host, port)
-                    ftp.auth()
-                    ftp.prot_p()
-                else:
-                    ftp = ftplib.FTP(timeout=10)
-                    ftp.connect(host, port)
-
-                ftp.login(user, passwd)
-                ftp.set_pasv(True)
-
-                # Ensure directory exists or create it
-                cur = ""
-                for part in path.strip("/").split("/"):
-                    if not part:
-                        continue
-                    cur += f"/{part}"
-                    try:
-                        ftp.cwd(cur)
-                    except ftplib.error_perm:
-                        ftp.mkd(cur)
-                        ftp.cwd(cur)
+                ftp = _get_ftp_connection(host, port, user, passwd, use_tls, timeout=15)
+                _ftp_ensure_dir(ftp, path)
 
                 # Write probe file
                 probe_filename = f"domolink_probe_{int(time.time())}.txt"
@@ -225,7 +293,6 @@ class DomoLinkStorageEngine:
                 except Exception:
                     pass
 
-                ftp.quit()
                 return {"success": True, "code": 200, "result_label": "Connecté", "message": "Accès en lecture et écriture vérifié avec succès."}
 
             except ftplib.error_perm as perm_err:
@@ -245,9 +312,12 @@ class DomoLinkStorageEngine:
             finally:
                 if ftp:
                     try:
-                        ftp.close()
+                        ftp.quit()
                     except Exception:
-                        pass
+                        try:
+                            ftp.close()
+                        except Exception:
+                            pass
 
         res = await self.hass.async_add_executor_job(_sync_ftp_test)
         if res.get("success"):
@@ -480,28 +550,8 @@ class DomoLinkStorageEngine:
         def _sync_ftp_upload():
             ftp = None
             try:
-                if use_tls:
-                    ftp = ftplib.FTP_TLS(timeout=60)
-                    ftp.connect(host, port)
-                    ftp.auth()
-                    ftp.prot_p()
-                else:
-                    ftp = ftplib.FTP(timeout=60)
-                    ftp.connect(host, port)
-
-                ftp.login(user, passwd)
-                ftp.set_pasv(True)
-
-                cur = ""
-                for part in path.strip("/").split("/"):
-                    if not part:
-                        continue
-                    cur += f"/{part}"
-                    try:
-                        ftp.cwd(cur)
-                    except ftplib.error_perm:
-                        ftp.mkd(cur)
-                        ftp.cwd(cur)
+                ftp = _get_ftp_connection(host, port, user, passwd, use_tls, timeout=120)
+                _ftp_ensure_dir(ftp, path)
 
                 total_sent = 0
 
@@ -517,7 +567,6 @@ class DomoLinkStorageEngine:
                 with open(file_path, "rb") as f:
                     ftp.storbinary(f"STOR {filename}", f, blocksize=65536, callback=_chunk_callback)
 
-                ftp.quit()
                 return True
             except Exception as err:
                 _LOGGER.error("DomoLink-BackUp: Échec envoi FTP de %s : %s", filename, err)
@@ -525,9 +574,12 @@ class DomoLinkStorageEngine:
             finally:
                 if ftp:
                     try:
-                        ftp.close()
+                        ftp.quit()
                     except Exception:
-                        pass
+                        try:
+                            ftp.close()
+                        except Exception:
+                            pass
 
         return await self.hass.async_add_executor_job(_sync_ftp_upload)
 
@@ -703,59 +755,69 @@ class DomoLinkStorageEngine:
             ftp = None
             items = []
             try:
-                if use_tls:
-                    ftp = ftplib.FTP_TLS(timeout=15)
-                    ftp.connect(host, port)
-                    ftp.auth()
-                    ftp.prot_p()
-                else:
-                    ftp = ftplib.FTP(timeout=15)
-                    ftp.connect(host, port)
-                ftp.login(user, passwd)
-                ftp.set_pasv(True)
-                try:
-                    ftp.cwd(path)
-                except Exception:
-                    return []
+                ftp = _get_ftp_connection(host, port, user, passwd, use_tls, timeout=20)
+                _ftp_ensure_dir(ftp, path)
 
-                # Use MLSD if supported, else NLST
+                # Check if server supports MLSD
+                has_mlsd = False
                 try:
-                    for name, facts in ftp.mlsd():
-                        if facts.get("type") == "file" and name.endswith((".tar", ".tar.gz", ".zip")):
-                            size = int(facts.get("size", 0))
-                            modify_str = facts.get("modify", "")
-                            # Parse YYYYMMDDHHMMSS
-                            try:
-                                dt = datetime.strptime(modify_str, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
-                                iso_date = dt.isoformat()
-                            except Exception:
-                                iso_date = datetime.now(timezone.utc).isoformat()
-
-                            items.append({
-                                "backup_id": name.replace(".tar", "").replace(".tar.gz", ""),
-                                "name": name,
-                                "filename": name,
-                                "size": size,
-                                "date": iso_date,
-                                "protocol": "ftp",
-                            })
+                    feat_resp = ftp.sendcmd("FEAT")
+                    if "MLSD" in feat_resp.upper():
+                        has_mlsd = True
                 except Exception:
+                    pass
+
+                listed = False
+                if has_mlsd:
+                    try:
+                        for name, facts in ftp.mlsd():
+                            if facts.get("type") == "file" and name.endswith((".tar", ".tar.gz", ".zip")):
+                                size = int(facts.get("size", 0))
+                                modify_str = facts.get("modify", "")
+                                try:
+                                    dt = datetime.strptime(modify_str, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+                                    iso_date = dt.isoformat()
+                                except Exception:
+                                    iso_date = datetime.now(timezone.utc).isoformat()
+
+                                clean_name = os.path.basename(name)
+                                items.append({
+                                    "backup_id": clean_name.replace(".tar", "").replace(".tar.gz", "").replace(".zip", ""),
+                                    "name": clean_name,
+                                    "filename": clean_name,
+                                    "size": size,
+                                    "date": iso_date,
+                                    "protocol": "ftp",
+                                })
+                        listed = True
+                    except Exception as mlsd_err:
+                        _LOGGER.debug("DomoLink-BackUp: MLSD échec (%s), reconnexion propre pour NLST", mlsd_err)
+                        try:
+                            ftp.close()
+                        except Exception:
+                            pass
+                        ftp = _get_ftp_connection(host, port, user, passwd, use_tls, timeout=20)
+                        _ftp_ensure_dir(ftp, path)
+
+                if not listed:
                     names = ftp.nlst()
-                    for name in names:
-                        if name.endswith((".tar", ".tar.gz", ".zip")):
+                    for raw_name in names:
+                        clean_name = os.path.basename(raw_name)
+                        if clean_name.endswith((".tar", ".tar.gz", ".zip")):
+                            size = 0
                             try:
-                                size = ftp.size(name) or 0
+                                size = ftp.size(raw_name) or 0
                             except Exception:
-                                size = 0
+                                pass
                             items.append({
-                                "backup_id": name.replace(".tar", "").replace(".tar.gz", ""),
-                                "name": name,
-                                "filename": name,
+                                "backup_id": clean_name.replace(".tar", "").replace(".tar.gz", "").replace(".zip", ""),
+                                "name": clean_name,
+                                "filename": clean_name,
                                 "size": size,
                                 "date": datetime.now(timezone.utc).isoformat(),
                                 "protocol": "ftp",
                             })
-                ftp.quit()
+
                 return items
             except Exception as e:
                 _LOGGER.error("DomoLink-BackUp: Erreur listing FTP : %s", e)
@@ -763,9 +825,12 @@ class DomoLinkStorageEngine:
             finally:
                 if ftp:
                     try:
-                        ftp.close()
+                        ftp.quit()
                     except Exception:
-                        pass
+                        try:
+                            ftp.close()
+                        except Exception:
+                            pass
 
         return await self.hass.async_add_executor_job(_sync_list)
 
@@ -930,26 +995,19 @@ class DomoLinkStorageEngine:
         def _sync_dl():
             ftp = None
             try:
-                if use_tls:
-                    ftp = ftplib.FTP_TLS(timeout=60)
-                    ftp.connect(host, port)
-                    ftp.auth()
-                    ftp.prot_p()
-                else:
-                    ftp = ftplib.FTP(timeout=60)
-                    ftp.connect(host, port)
-                ftp.login(user, passwd)
-                ftp.set_pasv(True)
-                ftp.cwd(path)
+                ftp = _get_ftp_connection(host, port, user, passwd, use_tls, timeout=120)
+                _ftp_ensure_dir(ftp, path)
                 with open(dest_path, "wb") as f:
                     ftp.retrbinary(f"RETR {filename}", f.write)
-                ftp.quit()
             finally:
                 if ftp:
                     try:
-                        ftp.close()
+                        ftp.quit()
                     except Exception:
-                        pass
+                        try:
+                            ftp.close()
+                        except Exception:
+                            pass
 
         await self.hass.async_add_executor_job(_sync_dl)
 
@@ -1033,18 +1091,9 @@ class DomoLinkStorageEngine:
         def _sync_del():
             ftp = None
             try:
-                if use_tls:
-                    ftp = ftplib.FTP_TLS(timeout=15)
-                    ftp.connect(host, port)
-                    ftp.auth()
-                    ftp.prot_p()
-                else:
-                    ftp = ftplib.FTP(timeout=15)
-                    ftp.connect(host, port)
-                ftp.login(user, passwd)
-                ftp.cwd(path)
+                ftp = _get_ftp_connection(host, port, user, passwd, use_tls, timeout=20)
+                _ftp_ensure_dir(ftp, path)
                 ftp.delete(filename)
-                ftp.quit()
                 return True
             except Exception as e:
                 _LOGGER.error("DomoLink-BackUp: Erreur suppression FTP %s: %s", filename, e)
@@ -1052,9 +1101,12 @@ class DomoLinkStorageEngine:
             finally:
                 if ftp:
                     try:
-                        ftp.close()
+                        ftp.quit()
                     except Exception:
-                        pass
+                        try:
+                            ftp.close()
+                        except Exception:
+                            pass
 
         return await self.hass.async_add_executor_job(_sync_del)
 
