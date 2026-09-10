@@ -104,6 +104,59 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS: list[str] = ["sensor", "button"]
 
 
+def _sync_find_or_create_backup_dir(candidate_dirs: list[str], fallback_dir: str) -> str:
+    """Identify or create an existing backup directory in executor."""
+    for d in candidate_dirs:
+        if os.path.isdir(d):
+            return d
+    os.makedirs(fallback_dir, exist_ok=True)
+    return fallback_dir
+
+
+def _sync_get_existing_archives(candidate_dirs: list[str]) -> set[str]:
+    """Scan all candidate backup directories for existing .tar files."""
+    files: set[str] = set()
+    for d in candidate_dirs:
+        if os.path.isdir(d):
+            files.update(glob.glob(os.path.join(d, "*.tar")))
+    return files
+
+
+def _sync_poll_new_backup_archive(candidate_dirs: list[str], before_files: set[str]) -> str | None:
+    """Check for newly created .tar archives and verify size stability."""
+    for d in candidate_dirs:
+        if not os.path.isdir(d):
+            continue
+        current_files = set(glob.glob(os.path.join(d, "*.tar")))
+        added = list(current_files - before_files)
+        if added:
+            candidate = max(added, key=os.path.getmtime)
+            s1 = os.path.getsize(candidate)
+            time.sleep(1.0)
+            s2 = os.path.getsize(candidate)
+            if s1 == s2 and s1 > 0:
+                return candidate
+    return None
+
+
+def _sync_find_recent_backup(candidate_dirs: list[str], max_age_seconds: int = 300) -> str | None:
+    """Find the most recently modified .tar archive within the last N seconds."""
+    recent: list[str] = []
+    now = time.time()
+    for d in candidate_dirs:
+        if not os.path.isdir(d):
+            continue
+        for f in glob.glob(os.path.join(d, "*.tar")):
+            try:
+                if (now - os.path.getmtime(f)) < max_age_seconds:
+                    recent.append(f)
+            except OSError:
+                continue
+    if recent:
+        return max(recent, key=os.path.getmtime)
+    return None
+
+
 class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinator managing DomoLink-BackUp state, tasks and synchronization."""
 
@@ -254,16 +307,13 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.hass.config.path("backups"),
             self.hass.config.path("backup"),
         ]
-        backup_dir = None
-        for d in candidate_dirs:
-            if os.path.isdir(d):
-                backup_dir = d
-                break
-        if not backup_dir:
-            backup_dir = self.hass.config.path("backups")
-            os.makedirs(backup_dir, exist_ok=True)
+        backup_dir = await self.hass.async_add_executor_job(
+            _sync_find_or_create_backup_dir, candidate_dirs, self.hass.config.path("backups")
+        )
 
-        before_files = set(glob.glob(os.path.join(backup_dir, "*.tar")))
+        before_files = await self.hass.async_add_executor_job(
+            _sync_get_existing_archives, candidate_dirs
+        )
 
         tar_path = None
         try:
@@ -283,47 +333,30 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else:
                 raise RuntimeError("Aucun service de sauvegarde Home Assistant (hassio ou backup) disponible.")
 
-            # Attendre la finalisation de l'archive (polling jusqu'à 300s avec vérification de taille stable)
+            # Attendre la finalisation de l'archive (polling non-bloquant jusqu'à 300s)
             deadline = time.monotonic() + 300
             new_file = None
             while time.monotonic() < deadline:
                 await asyncio.sleep(2)
-                for d in candidate_dirs:
-                    if not os.path.isdir(d):
-                        continue
-                    current_files = set(glob.glob(os.path.join(d, "*.tar")))
-                    added = list(current_files - before_files)
-                    if added:
-                        candidate = max(added, key=os.path.getmtime)
-                        # S'assurer que le fichier a fini d'être écrit sur disque
-                        s1 = os.path.getsize(candidate)
-                        await asyncio.sleep(1.5)
-                        s2 = os.path.getsize(candidate)
-                        if s1 == s2 and s1 > 0:
-                            new_file = candidate
-                            break
+                new_file = await self.hass.async_add_executor_job(
+                    _sync_poll_new_backup_archive, candidate_dirs, before_files
+                )
                 if new_file:
                     break
 
             if not new_file:
                 # Vérifier si un fichier tar a été créé/modifié dans les 5 dernières minutes
-                recent = []
-                for d in candidate_dirs:
-                    if not os.path.isdir(d):
-                        continue
-                    for f in glob.glob(os.path.join(d, "*.tar")):
-                        if (time.time() - os.path.getmtime(f)) < 300:
-                            recent.append(f)
-                if recent:
-                    new_file = max(recent, key=os.path.getmtime)
-                else:
+                new_file = await self.hass.async_add_executor_job(
+                    _sync_find_recent_backup, candidate_dirs, 300
+                )
+                if not new_file:
                     raise FileNotFoundError(
                         "Aucune nouvelle archive .tar détectée après déclenchement du service de sauvegarde."
                     )
 
             tar_path = new_file
             filename = os.path.basename(tar_path)
-            file_size = os.path.getsize(tar_path)
+            file_size = await self.hass.async_add_executor_job(os.path.getsize, tar_path)
 
             # 2. Téléversement vers la destination distante configurée
             self.set_status(STATE_UPLOADING, f"Téléversement de {filename} vers {dest_label}...", is_busy=True)
