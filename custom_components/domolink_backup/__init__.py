@@ -15,7 +15,11 @@ import time
 from typing import Any
 
 from homeassistant.components import frontend
-from homeassistant.components.http import StaticPathConfig
+try:
+    from homeassistant.components.http import StaticPathConfig
+except ImportError:
+    StaticPathConfig = None  # type: ignore[assignment,misc]
+
 from homeassistant.components.websocket_api import (
     async_register_command,
     websocket_command,
@@ -24,7 +28,6 @@ from homeassistant.components.websocket_api import (
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, callback
-from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
@@ -52,16 +55,30 @@ from .const import (
     CONF_RETENTION_DAYS,
     CONF_TELEGRAM_CHAT_ID,
     CONF_TELEGRAM_ENABLED,
+    CONF_TELEGRAM_NOTIFY_ON_ERROR,
+    CONF_TELEGRAM_NOTIFY_ON_START,
+    CONF_TELEGRAM_NOTIFY_ON_SUCCESS,
     CONF_TELEGRAM_TOKEN,
     CONF_WEBDAV_PASS,
     CONF_WEBDAV_PATH,
     CONF_WEBDAV_URL,
     CONF_WEBDAV_USER,
     CONF_WEBDAV_VERIFY_SSL,
+    DEFAULT_FTP_PATH,
+    DEFAULT_FTP_PORT,
+    DEFAULT_LOCAL_SHARE_PATH,
+    DEFAULT_MAX_BACKUPS_COUNT,
     DEFAULT_MAX_STORAGE_MB,
     DEFAULT_NAME,
+    DEFAULT_RETENTION_DAYS,
+    DEFAULT_WEBDAV_PATH,
     DOMAIN,
     NAME,
+    PROTO_FTP,
+    PROTO_FTPS,
+    PROTO_GOOGLE_DRIVE,
+    PROTO_LOCAL_SHARE,
+    PROTO_WEBDAV,
     SERVICE_CLEAN_OLD_BACKUPS,
     SERVICE_CREATE_BACKUP,
     SERVICE_SYNC_BACKUPS,
@@ -72,6 +89,7 @@ from .const import (
     STATE_ERROR,
     STATE_IDLE,
     STATE_SUCCESS,
+    STATE_TESTING,
     STATE_UPLOADING,
     STORAGE_KEY,
     STORAGE_VERSION,
@@ -83,8 +101,6 @@ from .storage_engine import DomoLinkStorageEngine
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[str] = ["sensor", "button"]
-if HAS_BACKUP_AGENT:
-    PLATFORMS.append("backup")
 
 
 class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -180,7 +196,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.data["total_storage_mb"] = total_mb
             self.data["destination_label"] = self.storage_engine.destination_label
 
-            if backups and not self.data.get("last_backup_date"):
+            if backups:
                 # Sort to find most recent
                 def _dt(x):
                     try:
@@ -231,52 +247,84 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.set_status(STATE_BACKING_UP, f"Création locale de '{backup_title}'...", is_busy=True)
         await self.notifier.async_notify_start(backup_title, dest_label)
 
-        # 1. Trigger Home Assistant native backup creation
+        # 1. Identifier les répertoires possibles de sauvegardes Home Assistant
+        candidate_dirs = [
+            "/backup",
+            self.hass.config.path("backups"),
+            self.hass.config.path("backup"),
+        ]
+        backup_dir = None
+        for d in candidate_dirs:
+            if os.path.isdir(d):
+                backup_dir = d
+                break
+        if not backup_dir:
+            backup_dir = self.hass.config.path("backups")
+            os.makedirs(backup_dir, exist_ok=True)
+
+        before_files = set(glob.glob(os.path.join(backup_dir, "*.tar")))
+
         tar_path = None
         try:
-            # Check for existing backup directory
-            backup_dir = self.hass.config.path("backup")
-            if not os.path.exists(backup_dir):
-                os.makedirs(backup_dir, exist_ok=True)
+            # Déclencher le service de sauvegarde natif HA approprié
+            # En HA Core / Supervisor :
+            # - hassio.backup_full accepte {"name": ...}
+            # - backup.create n'accepte AUCUN paramètre (création sans argument)
+            if self.hass.services.has_service("hassio", "backup_full"):
+                _LOGGER.info("DomoLink-BackUp: Appel du service hassio.backup_full ('%s')", backup_title)
+                await self.hass.services.async_call("hassio", "backup_full", {"name": backup_title}, blocking=True)
+            elif self.hass.services.has_service("backup", "create"):
+                _LOGGER.info("DomoLink-BackUp: Appel du service backup.create")
+                await self.hass.services.async_call("backup", "create", {}, blocking=True)
+            elif self.hass.services.has_service("backup", "create_automatic"):
+                _LOGGER.info("DomoLink-BackUp: Appel du service backup.create_automatic")
+                await self.hass.services.async_call("backup", "create_automatic", {}, blocking=True)
+            else:
+                raise RuntimeError("Aucun service de sauvegarde Home Assistant (hassio ou backup) disponible.")
 
-            before_files = set(glob.glob(os.path.join(backup_dir, "*.tar")))
+            # Attendre la finalisation de l'archive (polling jusqu'à 300s avec vérification de taille stable)
+            deadline = time.monotonic() + 300
+            new_file = None
+            while time.monotonic() < deadline:
+                await asyncio.sleep(2)
+                for d in candidate_dirs:
+                    if not os.path.isdir(d):
+                        continue
+                    current_files = set(glob.glob(os.path.join(d, "*.tar")))
+                    added = list(current_files - before_files)
+                    if added:
+                        candidate = max(added, key=os.path.getmtime)
+                        # S'assurer que le fichier a fini d'être écrit sur disque
+                        s1 = os.path.getsize(candidate)
+                        await asyncio.sleep(1.5)
+                        s2 = os.path.getsize(candidate)
+                        if s1 == s2 and s1 > 0:
+                            new_file = candidate
+                            break
+                if new_file:
+                    break
 
-            # Call HA backup service
-            service_data: dict[str, Any] = {"name": backup_title}
-            if not include_database:
-                service_data["include_database"] = False
-
-            # Try modern backup service first
-            try:
-                if self.hass.services.has_service("backup", "create"):
-                    await self.hass.services.async_call("backup", "create", service_data, blocking=True)
-                elif self.hass.services.has_service("backup", "create_automatic"):
-                    await self.hass.services.async_call("backup", "create_automatic", {}, blocking=True)
-                elif self.hass.services.has_service("hassio", "backup_full"):
-                    await self.hass.services.async_call("hassio", "backup_full", {"name": backup_title}, blocking=True)
+            if not new_file:
+                # Vérifier si un fichier tar a été créé/modifié dans les 5 dernières minutes
+                recent = []
+                for d in candidate_dirs:
+                    if not os.path.isdir(d):
+                        continue
+                    for f in glob.glob(os.path.join(d, "*.tar")):
+                        if (time.time() - os.path.getmtime(f)) < 300:
+                            recent.append(f)
+                if recent:
+                    new_file = max(recent, key=os.path.getmtime)
                 else:
-                    _LOGGER.warning("DomoLink-BackUp: Aucun service de sauvegarde standard trouvé dans Home Assistant.")
-            except Exception as srv_err:
-                _LOGGER.warning("DomoLink-BackUp: Tentative d'appel du service de sauvegarde HA: %s", srv_err)
+                    raise FileNotFoundError(
+                        "Aucune nouvelle archive .tar détectée après déclenchement du service de sauvegarde."
+                    )
 
-            # Wait a moment for file to finalize
-            await asyncio.sleep(2)
-            after_files = set(glob.glob(os.path.join(backup_dir, "*.tar")))
-            new_files = list(after_files - before_files)
-
-            if new_files:
-                tar_path = max(new_files, key=os.path.getmtime)
-            elif after_files:
-                # Find most recently modified .tar in backup directory
-                tar_path = max(after_files, key=os.path.getmtime)
-
-            if not tar_path or not os.path.exists(tar_path):
-                raise FileNotFoundError("Impossible d'identifier l'archive de sauvegarde créée par Home Assistant dans /backup")
-
+            tar_path = new_file
             filename = os.path.basename(tar_path)
             file_size = os.path.getsize(tar_path)
 
-            # 2. Upload to remote destination
+            # 2. Téléversement vers la destination distante configurée
             self.set_status(STATE_UPLOADING, f"Téléversement de {filename} vers {dest_label}...", is_busy=True)
 
             upload_success = await self.storage_engine.async_upload(
@@ -292,6 +340,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.data["last_backup_date"] = datetime.now(timezone.utc).isoformat()
                 self.data["last_backup_size_mb"] = size_mb
                 self.data["last_upload_duration_sec"] = round(elapsed, 1)
+                self.data["last_error"] = ""
 
                 await self.async_refresh_backups_list()
                 self.set_status(STATE_SUCCESS, f"Sauvegarde réussie ({round(elapsed, 1)}s)", is_busy=False)
@@ -402,14 +451,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if HAS_BACKUP_AGENT:
         agent = DomoLinkBackupAgent(hass, entry.entry_id, entry.title)
         entry_data["backup_agent"] = agent
-        notify_backup_agents_updated(hass)
 
+    # Store entry data BEFORE notifying listeners
     hass.data[DOMAIN][entry.entry_id] = entry_data
+
+    if HAS_BACKUP_AGENT:
+        notify_backup_agents_updated(hass)
 
     # ─── Enregistrement du Panneau Frontend dans la Barre Latérale ───
     frontend_dir = hass.config.path("custom_components/domolink_backup/frontend")
     if os.path.exists(frontend_dir):
-        if hasattr(hass.http, "async_register_static_paths"):
+        if hasattr(hass.http, "async_register_static_paths") and StaticPathConfig is not None:
             await hass.http.async_register_static_paths(
                 [StaticPathConfig("/domolink_backup_frontend", frontend_dir, cache_headers=False)]
             )
@@ -460,14 +512,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _handle_sync_backups(call: ServiceCall) -> None:
         await coordinator.async_refresh_backups_list()
 
-    hass.services.async_register(DOMAIN, SERVICE_CREATE_BACKUP, _handle_create_backup)
-    hass.services.async_register(DOMAIN, SERVICE_UPLOAD_BACKUP, _handle_upload_backup)
+    schema_create = vol.Schema({
+        vol.Optional("name"): str,
+        vol.Optional("include_database", default=True): bool,
+    })
+    schema_upload = vol.Schema({
+        vol.Required("file_path"): str,
+    })
+
+    hass.services.async_register(DOMAIN, SERVICE_CREATE_BACKUP, _handle_create_backup, schema=schema_create)
+    hass.services.async_register(DOMAIN, SERVICE_UPLOAD_BACKUP, _handle_upload_backup, schema=schema_upload)
     hass.services.async_register(DOMAIN, SERVICE_TEST_CONNECTION, _handle_test_connection)
     hass.services.async_register(DOMAIN, SERVICE_CLEAN_OLD_BACKUPS, _handle_clean_old_backups)
     hass.services.async_register(DOMAIN, SERVICE_SYNC_BACKUPS, _handle_sync_backups)
 
     # ─── Enregistrement des commandes WebSocket pour le Dashboard UI ───
-    _register_websocket_commands(hass, coordinator)
+    _register_websocket_commands(hass)
 
     # Forward setup to entity platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -478,12 +538,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-def _register_websocket_commands(hass: HomeAssistant, coordinator: DomoLinkBackupCoordinator) -> None:
+def _get_active_coordinator(hass: HomeAssistant) -> DomoLinkBackupCoordinator | None:
+    """Retrieve the primary active DomoLinkBackupCoordinator instance."""
+    domain_data = hass.data.get(DOMAIN, {})
+    for entry_id, data in domain_data.items():
+        if isinstance(data, dict) and "coordinator" in data:
+            return data["coordinator"]
+    return None
+
+
+def _register_websocket_commands(hass: HomeAssistant) -> None:
     """Register WebSocket API handlers for the frontend dashboard panel."""
 
     @websocket_command({vol.Required("type"): "domolink_backup/get_data"})
     @callback
     def ws_get_data(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
+        coordinator = _get_active_coordinator(hass)
+        if not coordinator:
+            connection.send_error(msg["id"], "not_found", "Coordinateur DomoLink-BackUp non initialisé")
+            return
+
         cfg = {**coordinator.entry.data, **coordinator.entry.options}
         # Mask sensitive passwords before sending to frontend
         safe_cfg = dict(cfg)
@@ -506,6 +580,10 @@ def _register_websocket_commands(hass: HomeAssistant, coordinator: DomoLinkBacku
         vol.Optional("include_database", default=True): bool,
     })
     async def ws_trigger_backup(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
+        coordinator = _get_active_coordinator(hass)
+        if not coordinator:
+            connection.send_error(msg["id"], "not_found", "Coordinateur non disponible")
+            return
         name = msg.get("name")
         include_db = msg.get("include_database", True)
         hass.async_create_task(coordinator.async_create_and_upload_backup(name, include_db))
@@ -513,11 +591,19 @@ def _register_websocket_commands(hass: HomeAssistant, coordinator: DomoLinkBacku
 
     @websocket_command({vol.Required("type"): "domolink_backup/test_connection"})
     async def ws_test_connection(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
+        coordinator = _get_active_coordinator(hass)
+        if not coordinator:
+            connection.send_error(msg["id"], "not_found", "Coordinateur non disponible")
+            return
         res = await coordinator.async_run_test_connection()
         connection.send_result(msg["id"], res)
 
     @websocket_command({vol.Required("type"): "domolink_backup/clean_backups"})
     async def ws_clean_backups(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
+        coordinator = _get_active_coordinator(hass)
+        if not coordinator:
+            connection.send_error(msg["id"], "not_found", "Coordinateur non disponible")
+            return
         res = await coordinator.async_apply_retention()
         connection.send_result(msg["id"], res)
 
@@ -526,6 +612,10 @@ def _register_websocket_commands(hass: HomeAssistant, coordinator: DomoLinkBacku
         vol.Required("backup_id"): str,
     })
     async def ws_delete_backup(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
+        coordinator = _get_active_coordinator(hass)
+        if not coordinator:
+            connection.send_error(msg["id"], "not_found", "Coordinateur non disponible")
+            return
         backup_id = msg["backup_id"]
         success = await coordinator.async_delete_backup(backup_id)
         connection.send_result(msg["id"], {"success": success})
@@ -554,6 +644,19 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             notify_backup_agents_updated(hass)
 
         if not hass.data[DOMAIN]:
+            # Remove all domain services
+            for svc in (
+                SERVICE_CREATE_BACKUP,
+                SERVICE_UPLOAD_BACKUP,
+                SERVICE_TEST_CONNECTION,
+                SERVICE_CLEAN_OLD_BACKUPS,
+                SERVICE_SYNC_BACKUPS,
+            ):
+                try:
+                    hass.services.async_remove(DOMAIN, svc)
+                except Exception:
+                    pass
+
             try:
                 frontend.async_remove_panel(hass, "domolink_backup")
             except Exception:

@@ -6,14 +6,18 @@
   ],
   "config_flow": true,
   "dependencies": [
-    "backup",
     "frontend",
     "http"
   ],
+  "after_dependencies": [
+    "backup",
+    "persistent_notification"
+  ],
   "documentation": "https://github.com/SocrateMobile/Domolink-BackUp",
   "integration_type": "hub",
-  "iot_class": "local_push",
+  "iot_class": "local_polling",
   "issue_tracker": "https://github.com/SocrateMobile/Domolink-BackUp/issues",
   "requirements": [],
-  "version": "1.0.2"
+  "single_config_entry": true,
+  "version": "1.1.0"
 }

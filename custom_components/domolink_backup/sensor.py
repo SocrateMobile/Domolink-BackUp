@@ -78,10 +78,14 @@ class DomoLinkBackupStatusSensor(DomoLinkBaseSensor):
     @property
     def native_value(self) -> str:
         """Return the current activity status."""
+        if not self.coordinator.data:
+            return STATE_IDLE
         return self.coordinator.data.get("status", STATE_IDLE)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        if not self.coordinator.data:
+            return {}
         return {
             "destination": self.coordinator.data.get("destination_label", ""),
             "last_action": self.coordinator.data.get("last_action", ""),
@@ -103,16 +107,23 @@ class DomoLinkBackupLastBackupSensor(DomoLinkBaseSensor):
     @property
     def native_value(self) -> datetime | None:
         """Return timestamp of the last successful backup."""
+        if not self.coordinator.data:
+            return None
         last_dt_str = self.coordinator.data.get("last_backup_date")
         if not last_dt_str:
             return None
         try:
-            return datetime.fromisoformat(last_dt_str)
+            dt = datetime.fromisoformat(last_dt_str)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
         except Exception:
             return None
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        if not self.coordinator.data:
+            return {}
         return {
             "backup_name": self.coordinator.data.get("last_backup_name", ""),
             "backup_size_mb": self.coordinator.data.get("last_backup_size_mb", 0.0),
@@ -127,12 +138,14 @@ class DomoLinkBackupCountSensor(DomoLinkBaseSensor):
         super().__init__(coordinator, entry)
         self._attr_name = "Nombre de sauvegardes"
         self._attr_unique_id = f"{entry.entry_id}_total_backups"
-        self._attr_state_class = SensorStateClass.TOTAL
+        self._attr_state_class = SensorStateClass.MEASUREMENT
         self._attr_icon = "mdi:folder-zip-outline"
 
     @property
     def native_value(self) -> int:
         """Return total count of remote backups."""
+        if not self.coordinator.data:
+            return 0
         return int(self.coordinator.data.get("total_backups_count", 0))
 
 
@@ -151,10 +164,14 @@ class DomoLinkBackupStorageUsedSensor(DomoLinkBaseSensor):
     @property
     def native_value(self) -> float:
         """Return total MB used on remote storage."""
+        if not self.coordinator.data:
+            return 0.0
         return float(self.coordinator.data.get("total_storage_mb", 0.0))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        if not self.coordinator.data:
+            return {}
         total_mb = float(self.coordinator.data.get("total_storage_mb", 0.0))
         max_mb = float(self.coordinator.data.get("max_storage_mb", 10240))
         pct = round((total_mb / max_mb) * 100, 1) if max_mb > 0 else 0.0
@@ -176,6 +193,8 @@ class DomoLinkBackupDestinationSensor(DomoLinkBaseSensor):
     @property
     def native_value(self) -> str:
         """Return label of active destination."""
+        if not self.coordinator.data:
+            return "Non configuré"
         return str(self.coordinator.data.get("destination_label", "Non configuré"))
 
 
@@ -191,10 +210,14 @@ class DomoLinkBackupConnectionSensor(DomoLinkBaseSensor):
     @property
     def native_value(self) -> str:
         """Return connection state badge."""
+        if not self.coordinator.data:
+            return "Prêt"
         return str(self.coordinator.data.get("connection_status", "Prêt"))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        if not self.coordinator.data:
+            return {}
         return {
             "latency_sec": self.coordinator.data.get("connection_latency", 0.0),
             "last_checked": self.coordinator.data.get("connection_last_checked", ""),

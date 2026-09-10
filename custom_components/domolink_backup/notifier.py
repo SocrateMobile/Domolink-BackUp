@@ -4,6 +4,7 @@ Handles Telegram alerts and Home Assistant persistent notifications.
 """
 from __future__ import annotations
 
+import html
 import logging
 from typing import Any
 
@@ -52,11 +53,14 @@ class DomoLinkNotifier:
         if not self.config.get(CONF_TELEGRAM_NOTIFY_ON_START, False):
             return
 
+        safe_name = html.escape(backup_name)
+        safe_dest = html.escape(destination)
+
         msg = (
             f"💾 <b>{NAME}</b>\n\n"
             f"🚀 <b>Démarrage de la sauvegarde</b>\n"
-            f"• <b>Nom</b> : <code>{backup_name}</code>\n"
-            f"• <b>Destination</b> : {destination}\n"
+            f"• <b>Nom</b> : <code>{safe_name}</code>\n"
+            f"• <b>Destination</b> : {safe_dest}\n"
             f"• <b>Statut</b> : Envoi vers le stockage distant..."
         )
         await self._send_telegram(msg)
@@ -71,8 +75,17 @@ class DomoLinkNotifier:
         total_size_mb: float = 0.0,
     ) -> None:
         """Notify on successful backup upload."""
+        # Dismiss any previous persistent error notification on success
+        persistent_notification.async_dismiss(self.hass, "domolink_backup_error")
+
         size_mb = round(size_bytes / (1024 * 1024), 2)
         size_str = f"{size_mb} Mo" if size_mb < 1024 else f"{round(size_mb / 1024, 2)} Go"
+
+        total_str = (
+            f"{total_size_mb} Mo"
+            if total_size_mb < 1024
+            else f"{round(total_size_mb / 1024, 2)} Go"
+        )
 
         self.hass.bus.async_fire(
             f"{DOMAIN}_event",
@@ -88,14 +101,17 @@ class DomoLinkNotifier:
         if not self.config.get(CONF_TELEGRAM_NOTIFY_ON_SUCCESS, True):
             return
 
+        safe_name = html.escape(backup_name)
+        safe_dest = html.escape(destination)
+
         msg = (
             f"💾 <b>{NAME}</b>\n\n"
             f"✅ <b>Sauvegarde réussie et sécurisée !</b>\n"
-            f"• <b>Fichier</b> : <code>{backup_name}</code>\n"
+            f"• <b>Fichier</b> : <code>{safe_name}</code>\n"
             f"• <b>Taille</b> : {size_str}\n"
             f"• <b>Durée de transfert</b> : {round(duration_sec, 1)} s\n"
-            f"• <b>Cible</b> : {destination}\n"
-            f"• <b>Archives distantes</b> : {remaining_count} sauvegarde(s) ({total_size_mb} Mo occupés)\n\n"
+            f"• <b>Cible</b> : {safe_dest}\n"
+            f"• <b>Archives distantes</b> : {remaining_count} sauvegarde(s) ({total_str} occupés)\n\n"
             f"🛡️ <i>Vos données Home Assistant sont protégées hors site.</i>"
         )
         await self._send_telegram(msg)
@@ -132,12 +148,16 @@ class DomoLinkNotifier:
         if not self.config.get(CONF_TELEGRAM_NOTIFY_ON_ERROR, True):
             return
 
+        safe_name = html.escape(backup_name)
+        safe_dest = html.escape(destination)
+        safe_err = html.escape(error_message)
+
         msg = (
             f"💾 <b>{NAME}</b>\n\n"
             f"⚠️ <b>Échec du transfert de la sauvegarde !</b>\n"
-            f"• <b>Fichier</b> : <code>{backup_name}</code>\n"
-            f"• <b>Destination</b> : {destination}\n"
-            f"• <b>Erreur</b> : {error_message}{code_str}\n\n"
+            f"• <b>Fichier</b> : <code>{safe_name}</code>\n"
+            f"• <b>Destination</b> : {safe_dest}\n"
+            f"• <b>Erreur</b> : {safe_err}{code_str}\n\n"
             f"🔧 <i>Vérifiez vos paramètres réseau ou vos identifiants dans le panneau DomoLink-BackUp.</i>"
         )
         await self._send_telegram(msg)
@@ -156,7 +176,7 @@ class DomoLinkNotifier:
             "chat_id": chat_id,
             "text": html_message,
             "parse_mode": "HTML",
-            "disable_web_page_preview": True,
+            "link_preview_options": {"is_disabled": True},
         }
 
         try:
@@ -164,7 +184,8 @@ class DomoLinkNotifier:
                 if resp.status == 200:
                     return True
                 else:
-                    _LOGGER.warning("DomoLink-BackUp: Échec envoi Telegram (HTTP %s)", resp.status)
+                    err_body = await resp.text()
+                    _LOGGER.warning("DomoLink-BackUp: Échec envoi Telegram (HTTP %s) : %s", resp.status, err_body)
                     return False
         except Exception as err:
             _LOGGER.warning("DomoLink-BackUp: Erreur lors de l'envoi Telegram : %s", err)

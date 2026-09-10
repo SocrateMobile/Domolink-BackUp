@@ -100,6 +100,12 @@ class DomoLinkBackupAgent(BackupAgent):
         return data.get("storage_engine")
 
     @property
+    def _coordinator(self):
+        """Get the coordinator instance from hass data."""
+        data = self.hass.data.get(DOMAIN, {}).get(self.unique_id, {})
+        return data.get("coordinator")
+
+    @property
     def _notifier(self):
         """Get the notifier instance from hass data."""
         data = self.hass.data.get(DOMAIN, {}).get(self.unique_id, {})
@@ -207,6 +213,9 @@ class DomoLinkBackupAgent(BackupAgent):
                     )
                 )
 
+        except BackupAgentError:
+            # Already notified
+            raise
         except Exception as err:
             _LOGGER.exception("DomoLink-BackUp: Exception pendant async_upload_backup: %s", err)
             if notifier:
@@ -218,6 +227,9 @@ class DomoLinkBackupAgent(BackupAgent):
                     )
                 )
             raise BackupAgentError(f"Erreur d'envoi DomoLink-BackUp : {err}") from err
+        finally:
+            if self._coordinator:
+                self.hass.async_create_task(self._coordinator.async_refresh_backups_list())
 
     async def async_download_backup(self, backup_id: str, **kwargs: Any) -> AsyncIterator[bytes]:
         """Download a backup file as an asynchronous stream."""
@@ -238,9 +250,18 @@ class DomoLinkBackupAgent(BackupAgent):
         if not engine:
             raise BackupAgentError("Moteur de stockage non initialisé")
 
-        success = await engine.async_delete_backup(backup_id)
+        try:
+            success = await engine.async_delete_backup(backup_id)
+        except FileNotFoundError as fnf:
+            raise BackupNotFound(str(fnf)) from fnf
+        except Exception as err:
+            raise BackupAgentError(f"Erreur suppression : {err}") from err
+
         if not success:
             raise BackupAgentError(f"Impossible de supprimer la sauvegarde distante : {backup_id}")
+
+        if self._coordinator:
+            self.hass.async_create_task(self._coordinator.async_refresh_backups_list())
 
 
 async def async_get_backup_agents(hass: HomeAssistant) -> list[BackupAgent]:
@@ -272,6 +293,7 @@ def async_register_backup_agents_listener(
     return remove_listener
 
 
+@callback
 def notify_backup_agents_updated(hass: HomeAssistant) -> None:
     """Notify listeners that backup agents have been updated."""
     for listener in hass.data.get(DATA_BACKUP_AGENT_LISTENERS, []):
@@ -279,3 +301,13 @@ def notify_backup_agents_updated(hass: HomeAssistant) -> None:
             listener()
         except Exception as err:
             _LOGGER.warning("DomoLink-BackUp: Erreur lors de l'appel du listener de backup agent : %s", err)
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: Any) -> bool:
+    """Setup backup platform."""
+    return True
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: Any) -> bool:
+    """Unload backup platform."""
+    return True
