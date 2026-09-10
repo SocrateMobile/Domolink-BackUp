@@ -535,7 +535,7 @@ class DomoLinkBackupPanel extends HTMLElement {
             <div class="app-icon">💾</div>
             <div class="title-sub">
               <h1 class="app-title">DomoLink-BackUp</h1>
-              <div class="app-subtitle">Stockage distant & haute sécurité pour Home Assistant • v1.1.2</div>
+              <div class="app-subtitle">Stockage distant & haute sécurité pour Home Assistant • v1.1.3</div>
             </div>
           </div>
           <div class="badge-status">
