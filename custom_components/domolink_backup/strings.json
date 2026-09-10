@@ -2,114 +2,188 @@
   "config": {
     "step": {
       "user": {
-        "title": "Configuration de DomoLink-BackUp (1/4)",
-        "description": "Sélectionnez votre profil de stockage ou NAS ainsi que le protocole de transfert souhaité.",
+        "title": "DomoLink-BackUp Configuration (1/4)",
+        "description": "Select your storage or NAS profile and preferred transfer protocol.",
         "data": {
-          "name": "Nom de l'intégration",
-          "nas_type": "Profil NAS / Destination",
-          "protocol": "Protocole de transfert"
+          "name": "Integration Name",
+          "nas_type": "NAS Profile / Destination",
+          "protocol": "Transfer Protocol"
         }
       },
       "credentials": {
-        "title": "Paramètres de connexion (2/4)",
-        "description": "Renseignez les accès réseau pour votre cible de sauvegarde. Les ports et chemins par défaut ont été pré-remplis selon votre profil.",
+        "title": "Connection Settings (2/4)",
+        "description": "Enter network access credentials for your backup destination. Default ports and paths have been pre-populated according to your profile.",
         "data": {
-          "ftp_host": "Hôte ou IP du serveur FTP",
-          "ftp_port": "Port FTP (défaut: 21)",
-          "ftp_user": "Nom d'utilisateur FTP",
-          "ftp_pass": "Mot de passe FTP",
-          "ftp_path": "Chemin distant du dossier de sauvegarde",
-          "ftp_tls": "Activer le chiffrement TLS (FTPS)",
-          "webdav_url": "URL du serveur WebDAV (ex: https://192.168.1.100:5006)",
-          "webdav_user": "Nom d'utilisateur WebDAV",
-          "webdav_pass": "Mot de passe WebDAV",
-          "webdav_path": "Chemin de la collection distante",
-          "webdav_verify_ssl": "Vérifier le certificat SSL WebDAV",
-          "google_drive_webhook_url": "URL du Webhook Google Apps Script",
-          "google_drive_folder_id": "ID du dossier Google Drive (optionnel)",
-          "local_share_path": "Chemin absolu du dossier local ou partagé"
+          "ftp_host": "FTP Server Host or IP",
+          "ftp_port": "FTP Port (default: 21)",
+          "ftp_user": "FTP Username",
+          "ftp_pass": "FTP Password",
+          "ftp_path": "Remote Backup Directory Path",
+          "ftp_tls": "Enable TLS Encryption (FTPS)",
+          "webdav_url": "WebDAV Server URL (e.g. https://192.168.1.100:5006)",
+          "webdav_user": "WebDAV Username",
+          "webdav_pass": "WebDAV Password",
+          "webdav_path": "Remote Collection Path",
+          "webdav_verify_ssl": "Verify WebDAV SSL Certificate",
+          "google_drive_webhook_url": "Google Apps Script Webhook URL",
+          "google_drive_folder_id": "Google Drive Folder ID (optional)",
+          "local_share_path": "Local or Mounted Share Absolute Path"
         }
       },
       "retention": {
-        "title": "Politique de rétention et quotas (3/4)",
-        "description": "Définissez les règles de rotation automatique (FIFO) pour vos sauvegardes distantes.",
+        "title": "Retention Policy & Quotas (3/4)",
+        "description": "Define automatic rotation rules (FIFO) for remote backup archives.",
         "data": {
-          "max_backups_count": "Nombre maximum de sauvegardes à conserver",
-          "retention_days": "Rétention maximale en jours",
-          "max_storage_mb": "Espace de stockage maximal alloué (en Mo)",
-          "auto_clean_enabled": "Activer le nettoyage automatique (purge FIFO)"
+          "max_backups_count": "Maximum backups to keep",
+          "retention_days": "Maximum retention in days",
+          "max_storage_mb": "Maximum storage allocated (MB)",
+          "auto_clean_enabled": "Enable automatic cleanup (FIFO purge)"
         }
       },
       "telegram": {
-        "title": "Alertes et notifications Telegram (4/4)",
-        "description": "Recevez en temps réel le compte-rendu de vos sauvegardes par Telegram (optionnel).",
+        "title": "Telegram Alerts & Notifications (4/4)",
+        "description": "Receive real-time backup reports on Telegram (optional).",
         "data": {
-          "telegram_enabled": "Activer les alertes Telegram",
-          "telegram_token": "Jeton du Bot Telegram (Token)",
-          "telegram_chat_id": "Chat ID Telegram",
-          "telegram_notify_on_start": "Notifier au démarrage de la sauvegarde",
-          "telegram_notify_on_success": "Notifier en cas de succès",
-          "telegram_notify_on_error": "Notifier en cas d'erreur"
+          "telegram_enabled": "Enable Telegram alerts",
+          "telegram_token": "Telegram Bot Token",
+          "telegram_chat_id": "Telegram Chat ID",
+          "telegram_notify_on_start": "Notify when backup starts",
+          "telegram_notify_on_success": "Notify on backup success",
+          "telegram_notify_on_error": "Notify on backup error"
         }
       }
     },
     "error": {
-      "cannot_connect": "Échec de connexion au serveur distant",
-      "invalid_auth": "Identifiants invalides",
-      "unknown": "Erreur inattendue"
+      "cannot_connect": "Failed to connect to remote server",
+      "invalid_auth": "Invalid credentials",
+      "unknown": "Unexpected error"
     },
     "abort": {
-      "already_configured": "Cet appareil est déjà configuré."
+      "already_configured": "This device is already configured."
     }
   },
   "options": {
     "step": {
       "destination": {
-        "title": "Modifier la destination de sauvegarde",
+        "title": "Change Backup Destination",
         "data": {
-          "nas_type": "Profil NAS / Destination",
-          "protocol": "Protocole de transfert"
+          "nas_type": "NAS Profile / Destination",
+          "protocol": "Transfer Protocol"
         }
       },
       "credentials": {
-        "title": "Paramètres de connexion",
+        "title": "Connection Parameters",
         "data": {
-          "ftp_host": "Hôte ou IP du serveur FTP",
-          "ftp_port": "Port FTP",
-          "ftp_user": "Nom d'utilisateur FTP",
-          "ftp_pass": "Mot de passe FTP",
-          "ftp_path": "Chemin distant",
-          "ftp_tls": "Activer TLS (FTPS)",
-          "webdav_url": "URL du serveur WebDAV",
-          "webdav_user": "Nom d'utilisateur WebDAV",
-          "webdav_pass": "Mot de passe WebDAV",
-          "webdav_path": "Chemin distant",
-          "webdav_verify_ssl": "Vérifier le certificat SSL",
-          "google_drive_webhook_url": "URL Webhook Google Apps Script",
-          "google_drive_folder_id": "ID du dossier Google Drive",
-          "local_share_path": "Chemin du dossier local / montage"
+          "ftp_host": "FTP Server Host",
+          "ftp_port": "FTP Port",
+          "ftp_user": "FTP Username",
+          "ftp_pass": "FTP Password",
+          "ftp_path": "Remote Path",
+          "ftp_tls": "Enable TLS (FTPS)",
+          "webdav_url": "WebDAV Server URL",
+          "webdav_user": "WebDAV Username",
+          "webdav_pass": "WebDAV Password",
+          "webdav_path": "Remote Path",
+          "webdav_verify_ssl": "Verify SSL",
+          "google_drive_webhook_url": "Google Apps Script Webhook URL",
+          "google_drive_folder_id": "Google Drive Folder ID",
+          "local_share_path": "Local Share Path"
         }
       },
       "retention": {
-        "title": "Quotas et rétention",
+        "title": "Quotas & Retention",
         "data": {
-          "max_backups_count": "Nombre maximum de sauvegardes",
-          "retention_days": "Rétention maximale (jours)",
-          "max_storage_mb": "Espace maximal (Mo)",
-          "auto_clean_enabled": "Nettoyage automatique"
+          "max_backups_count": "Maximum backups",
+          "retention_days": "Max retention (days)",
+          "max_storage_mb": "Max storage (MB)",
+          "auto_clean_enabled": "Automatic cleanup"
         }
       },
       "telegram": {
-        "title": "Notifications Telegram",
+        "title": "Telegram Notifications",
         "data": {
-          "telegram_enabled": "Activer Telegram",
-          "telegram_token": "Token Bot",
+          "telegram_enabled": "Enable Telegram",
+          "telegram_token": "Bot Token",
           "telegram_chat_id": "Chat ID",
-          "telegram_notify_on_start": "Alerte démarrage",
-          "telegram_notify_on_success": "Alerte succès",
-          "telegram_notify_on_error": "Alerte échec"
+          "telegram_notify_on_start": "Alert on start",
+          "telegram_notify_on_success": "Alert on success",
+          "telegram_notify_on_error": "Alert on error"
         }
       }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "statut": {
+        "name": "Status"
+      },
+      "derniere_sauvegarde": {
+        "name": "Last backup"
+      },
+      "total_sauvegardes": {
+        "name": "Backup count"
+      },
+      "espace_utilise": {
+        "name": "Remote storage used"
+      },
+      "destination": {
+        "name": "Storage destination"
+      },
+      "connexion": {
+        "name": "Connection state"
+      }
+    },
+    "button": {
+      "sauvegarder": {
+        "name": "Backup now"
+      },
+      "tester": {
+        "name": "Test connection"
+      },
+      "nettoyer": {
+        "name": "Clean by retention"
+      },
+      "synchroniser": {
+        "name": "Synchronize backups"
+      }
+    }
+  },
+  "services": {
+    "create_backup": {
+      "name": "Create and upload backup",
+      "description": "Triggers the creation of a Home Assistant backup and immediately uploads it to your DomoLink-BackUp remote storage destination.",
+      "fields": {
+        "name": {
+          "name": "Backup name",
+          "description": "Custom name for the backup (optional)."
+        },
+        "include_database": {
+          "name": "Include database",
+          "description": "Include the recorder database history in the archive."
+        }
+      }
+    },
+    "upload_backup": {
+      "name": "Upload backup file",
+      "description": "Uploads an existing backup archive file (.tar) from Home Assistant to the configured remote destination.",
+      "fields": {
+        "file_path": {
+          "name": "File path",
+          "description": "Absolute path to the archive file to send (e.g. /backup/my_archive.tar)."
+        }
+      }
+    },
+    "test_connection": {
+      "name": "Test storage connection",
+      "description": "Runs a complete connection diagnostic and verifies write permissions on the remote server."
+    },
+    "clean_old_backups": {
+      "name": "Clean by retention (FIFO purge)",
+      "description": "Analyzes remote backups and deletes the oldest archives exceeding your quota rules."
+    },
+    "sync_backups": {
+      "name": "Synchronize backups",
+      "description": "Queries the remote server to update the list of backups, storage used, and state sensors."
     }
   }
 }

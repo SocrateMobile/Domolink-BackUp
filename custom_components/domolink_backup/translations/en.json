@@ -111,5 +111,79 @@
         }
       }
     }
+  },
+  "entity": {
+    "sensor": {
+      "statut": {
+        "name": "Status"
+      },
+      "derniere_sauvegarde": {
+        "name": "Last backup"
+      },
+      "total_sauvegardes": {
+        "name": "Backup count"
+      },
+      "espace_utilise": {
+        "name": "Remote storage used"
+      },
+      "destination": {
+        "name": "Storage destination"
+      },
+      "connexion": {
+        "name": "Connection state"
+      }
+    },
+    "button": {
+      "sauvegarder": {
+        "name": "Backup now"
+      },
+      "tester": {
+        "name": "Test connection"
+      },
+      "nettoyer": {
+        "name": "Clean by retention"
+      },
+      "synchroniser": {
+        "name": "Synchronize backups"
+      }
+    }
+  },
+  "services": {
+    "create_backup": {
+      "name": "Create and upload backup",
+      "description": "Triggers the creation of a Home Assistant backup and immediately uploads it to your DomoLink-BackUp remote storage destination.",
+      "fields": {
+        "name": {
+          "name": "Backup name",
+          "description": "Custom name for the backup (optional)."
+        },
+        "include_database": {
+          "name": "Include database",
+          "description": "Include the recorder database history in the archive."
+        }
+      }
+    },
+    "upload_backup": {
+      "name": "Upload backup file",
+      "description": "Uploads an existing backup archive file (.tar) from Home Assistant to the configured remote destination.",
+      "fields": {
+        "file_path": {
+          "name": "File path",
+          "description": "Absolute path to the archive file to send (e.g. /backup/my_archive.tar)."
+        }
+      }
+    },
+    "test_connection": {
+      "name": "Test storage connection",
+      "description": "Runs a complete connection diagnostic and verifies write permissions on the remote server."
+    },
+    "clean_old_backups": {
+      "name": "Clean by retention (FIFO purge)",
+      "description": "Analyzes remote backups and deletes the oldest archives exceeding your quota rules."
+    },
+    "sync_backups": {
+      "name": "Synchronize backups",
+      "description": "Queries the remote server to update the list of backups, storage used, and state sensors."
+    }
   }
 }

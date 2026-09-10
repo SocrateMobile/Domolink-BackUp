@@ -65,7 +65,6 @@ from .const import (
     PROTO_FTPS,
     PROTO_GOOGLE_DRIVE,
     PROTO_LOCAL_SHARE,
-    PROTO_SFTP,
     PROTO_WEBDAV,
 )
 
@@ -113,14 +112,19 @@ def _get_ftp_connection(
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         ftp = ReusedSessionFTP_TLS(context=ctx, timeout=timeout)
+        ftp.encoding = "utf-8"
         ftp.connect(host, port)
         ftp.auth()
+        # Some servers require login before prot_p, others allow either.
+        # Calling login first is standard RFC 4217 compliant.
+        ftp.login(user, passwd)
         ftp.prot_p()
     else:
         ftp = ftplib.FTP(timeout=timeout)
+        ftp.encoding = "utf-8"
         ftp.connect(host, port)
+        ftp.login(user, passwd)
 
-    ftp.login(user, passwd)
     ftp.set_pasv(True)
     return ftp
 
@@ -135,7 +139,7 @@ def _ftp_ensure_dir(ftp: ftplib.FTP | ReusedSessionFTP_TLS, path: str) -> None:
             pass
         return
 
-    # Fast path: try direct cwd
+    # Fast path: direct cwd
     try:
         ftp.cwd(clean_path)
         return
@@ -156,9 +160,12 @@ def _ftp_ensure_dir(ftp: ftplib.FTP | ReusedSessionFTP_TLS, path: str) -> None:
         except Exception:
             try:
                 ftp.mkd(part)
-                ftp.cwd(part)
             except Exception:
+                pass  # Directory may already exist
+            try:
                 ftp.cwd(part)
+            except Exception as e:
+                _LOGGER.warning("DomoLink-BackUp: Impossible d'accéder au sous-dossier FTP '%s' : %s", part, e)
 
 
 class DomoLinkStorageEngine:
@@ -220,7 +227,7 @@ class DomoLinkStorageEngine:
         self._log_test(f"Démarrage du test pour : {self.destination_label} (Protocole: {proto.upper()})", "info")
 
         try:
-            if proto in (PROTO_FTP, PROTO_FTPS, PROTO_SFTP):
+            if proto in (PROTO_FTP, PROTO_FTPS):
                 res = await self._async_test_ftp(cfg)
             elif proto == PROTO_WEBDAV:
                 res = await self._async_test_webdav(cfg)
@@ -262,10 +269,10 @@ class DomoLinkStorageEngine:
 
     # ─── FTP / FTPS Test ───
     async def _async_test_ftp(self, cfg: dict[str, Any]) -> dict[str, Any]:
-        """Test FTP / FTPS connection in executor."""
-        host = cfg.get(CONF_FTP_HOST, "")
+        """Test FTP / FTPS connection in executor with granular step logs."""
+        host = cfg.get(CONF_FTP_HOST, "").strip()
         port = int(cfg.get(CONF_FTP_PORT, DEFAULT_FTP_PORT) or DEFAULT_FTP_PORT)
-        user = cfg.get(CONF_FTP_USER, "")
+        user = cfg.get(CONF_FTP_USER, "").strip()
         passwd = cfg.get(CONF_FTP_PASS, "")
         path = (cfg.get(CONF_FTP_PATH, DEFAULT_FTP_PATH) or DEFAULT_FTP_PATH).strip()
         use_tls = bool(cfg.get(CONF_FTP_TLS, False) or cfg.get(CONF_PROTOCOL) == PROTO_FTPS)
@@ -274,26 +281,88 @@ class DomoLinkStorageEngine:
             self._log_test("Hôte FTP manquant.", "error")
             return {"success": False, "code": 400, "result_label": "Erreur 400", "message": "Hôte FTP non configuré."}
 
-        self._log_test(f"1. Connexion réseau vers {host}:{port} (TLS={use_tls})...", "info")
+        self._log_test(f"1. Démarrage du diagnostic FTP vers {host}:{port} (TLS={use_tls})...", "info")
 
         def _sync_ftp_test():
             ftp = None
-            try:
-                ftp = _get_ftp_connection(host, port, user, passwd, use_tls, timeout=15)
-                _ftp_ensure_dir(ftp, path)
+            step_logs = []
+            t0 = time.monotonic()
 
-                # Write probe file
+            def log_step(msg: str, level: str = "info"):
+                elapsed_ms = round((time.monotonic() - t0) * 1000)
+                step_logs.append({"msg": f"[{elapsed_ms}ms] {msg}", "level": level})
+
+            try:
+                # Étape 1 : Connexion TCP
+                log_step(f"Connexion réseau TCP vers {host}:{port}...")
+                if use_tls:
+                    ctx = ssl.create_default_context()
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
+                    ftp = ReusedSessionFTP_TLS(context=ctx, timeout=15)
+                    ftp.encoding = "utf-8"
+                    ftp.connect(host, port)
+                    log_step("   ✓ Connexion TCP établie avec succès", "info")
+
+                    # Étape 2 : Handshake TLS
+                    log_step("Négociation chiffrement TLS (AUTH TLS)...")
+                    ftp.auth()
+                    log_step("   ✓ Canal de commande TLS chiffré", "info")
+
+                    # Étape 3 : Authentification
+                    log_step(f"Authentification utilisateur '{user}'...")
+                    ftp.login(user, passwd)
+                    log_step("   ✓ Authentification validée", "info")
+
+                    # Étape 4 : Canal de données sécurisé
+                    log_step("Sécurisation du canal de données (PROT P)...")
+                    ftp.prot_p()
+                    log_step("   ✓ Canal de données sécurisé", "info")
+                else:
+                    ftp = ftplib.FTP(timeout=15)
+                    ftp.encoding = "utf-8"
+                    ftp.connect(host, port)
+                    log_step("   ✓ Connexion TCP établie avec succès", "info")
+
+                    log_step(f"Authentification utilisateur '{user}'...")
+                    ftp.login(user, passwd)
+                    log_step("   ✓ Authentification validée", "info")
+
+                # Étape 5 : Mode passif
+                ftp.set_pasv(True)
+                log_step("   ✓ Mode passif (PASV) activé", "info")
+
+                # Étape 6 : Navigation / vérification dossier
+                log_step(f"Vérification du dossier distant '{path}'...")
+                _ftp_ensure_dir(ftp, path)
+                try:
+                    current_dir = ftp.pwd()
+                except Exception:
+                    current_dir = path
+                log_step(f"   ✓ Positionné dans le dossier : {current_dir}", "info")
+
+                # Étape 7 : Test d'écriture
                 probe_filename = f"domolink_probe_{int(time.time())}.txt"
+                log_step(f"Test d'écriture du fichier sonde ({probe_filename})...")
                 probe_data = io.BytesIO(b"DomoLink-BackUp Probe Test OK")
                 ftp.storbinary(f"STOR {probe_filename}", probe_data)
+                log_step("   ✓ Écriture réussie (droits STOR confirmés)", "info")
 
-                # Clean probe file
+                # Étape 8 : Test de suppression
+                log_step("Test de suppression du fichier sonde...")
                 try:
                     ftp.delete(probe_filename)
-                except Exception:
-                    pass
+                    log_step("   ✓ Suppression réussie (droits DELE confirmés)", "info")
+                except Exception as del_err:
+                    log_step(f"   ⚠️ Avertissement suppression : {del_err} (droits DELE restreints)", "warning")
 
-                return {"success": True, "code": 200, "result_label": "Connecté", "message": "Accès en lecture et écriture vérifié avec succès."}
+                return {
+                    "success": True,
+                    "code": 200,
+                    "result_label": "Connecté",
+                    "message": f"Connexion et droits d'écriture validés dans {current_dir}",
+                    "step_logs": step_logs,
+                }
 
             except ftplib.error_perm as perm_err:
                 err_code = 530
@@ -301,14 +370,42 @@ class DomoLinkStorageEngine:
                 m = re.search(r"\b([1-5]\d{2})\b", msg)
                 if m:
                     err_code = int(m.group(1))
-                return {"success": False, "code": err_code, "result_label": f"Erreur {err_code}", "message": f"Erreur FTP : {msg}"}
+                log_step(f"   ✗ Erreur permissions FTP ({err_code}) : {msg}", "error")
+                return {
+                    "success": False,
+                    "code": err_code,
+                    "result_label": f"Erreur {err_code}",
+                    "message": f"Erreur FTP : {msg}",
+                    "step_logs": step_logs,
+                }
             except (TimeoutError, asyncio.TimeoutError):
-                return {"success": False, "code": 110, "result_label": "Erreur 110", "message": "Délai de connexion dépassé (Timeout)."}
+                log_step("   ✗ Délai de connexion dépassé (Timeout 15s)", "error")
+                return {
+                    "success": False,
+                    "code": 110,
+                    "result_label": "Erreur 110",
+                    "message": "Délai de connexion dépassé (Timeout). Vérifiez l'IP et le port.",
+                    "step_logs": step_logs,
+                }
             except OSError as os_err:
                 err_code = abs(os_err.errno) if os_err.errno else 111
-                return {"success": False, "code": err_code, "result_label": f"Erreur {err_code}", "message": f"Erreur réseau : {os_err}"}
+                log_step(f"   ✗ Erreur réseau ({err_code}) : {os_err}", "error")
+                return {
+                    "success": False,
+                    "code": err_code,
+                    "result_label": f"Erreur {err_code}",
+                    "message": f"Erreur réseau : {os_err}",
+                    "step_logs": step_logs,
+                }
             except Exception as e:
-                return {"success": False, "code": 500, "result_label": "Erreur", "message": f"Erreur : {e}"}
+                log_step(f"   ✗ Erreur inattendue : {e}", "error")
+                return {
+                    "success": False,
+                    "code": 500,
+                    "result_label": "Erreur",
+                    "message": f"Erreur : {e}",
+                    "step_logs": step_logs,
+                }
             finally:
                 if ftp:
                     try:
@@ -320,10 +417,13 @@ class DomoLinkStorageEngine:
                             pass
 
         res = await self.hass.async_add_executor_job(_sync_ftp_test)
+        for entry in res.pop("step_logs", []):
+            self._log_test(entry["msg"], entry["level"])
+
         if res.get("success"):
-            self._log_test("   ✓ Connexion et droits d'écriture validés.", "success")
+            self._log_test("✓ Diagnostic FTP terminé avec succès.", "success")
         else:
-            self._log_test(f"   ✗ Échec : {res.get('message')}", "error")
+            self._log_test(f"✗ Diagnostic FTP en échec : {res.get('message')}", "error")
         return res
 
     # ─── WebDAV Test ───
@@ -497,23 +597,27 @@ class DomoLinkStorageEngine:
             # Need a concrete file for FTP executor or large uploads
             temp_path = self.hass.config.path(f"domolink_backup_temp_{filename}")
             temp_created = True
+            file_path = temp_path
             bytes_written = 0
             stream = await source()
+
+            def _write_chunk(f_handle, chunk_data):
+                f_handle.write(chunk_data)
+
             with open(temp_path, "wb") as f:
                 async for chunk in stream:
-                    f.write(chunk)
+                    await self.hass.async_add_executor_job(_write_chunk, f, chunk)
                     bytes_written += len(chunk)
                     if on_progress:
                         try:
                             on_progress(bytes_written)
                         except Exception:
                             pass
-            file_path = temp_path
             if size == 0:
                 size = bytes_written
 
         try:
-            if proto in (PROTO_FTP, PROTO_FTPS, PROTO_SFTP):
+            if proto in (PROTO_FTP, PROTO_FTPS):
                 success = await self._async_upload_ftp(file_path, filename, on_progress)
             elif proto == PROTO_WEBDAV:
                 success = await self._async_upload_webdav(file_path, filename, size, on_progress)
@@ -658,6 +762,14 @@ class DomoLinkStorageEngine:
             _LOGGER.error("DomoLink-BackUp: URL Webhook Google Drive non renseignée")
             return False
 
+        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        if file_size_mb > 45:
+            _LOGGER.error(
+                "DomoLink-BackUp: Sauvegarde trop volumineuse (%.1f Mo) pour Google Drive Webhook (limite ~45 Mo). Utilisez FTP, FTPS ou WebDAV.",
+                file_size_mb,
+            )
+            return False
+
         def _read_and_encode():
             with open(file_path, "rb") as f:
                 content = f.read()
@@ -697,6 +809,10 @@ class DomoLinkStorageEngine:
         dest_dir = cfg.get(CONF_LOCAL_SHARE_PATH, DEFAULT_LOCAL_SHARE_PATH)
         target_path = os.path.join(dest_dir, filename)
 
+        if os.path.abspath(file_path) == os.path.abspath(target_path):
+            _LOGGER.info("DomoLink-BackUp: Le fichier %s est déjà dans le répertoire de destination locale", filename)
+            return True
+
         def _sync_copy():
             try:
                 os.makedirs(dest_dir, exist_ok=True)
@@ -728,7 +844,7 @@ class DomoLinkStorageEngine:
         """List all available remote backups across configured storage."""
         proto = self.protocol
         try:
-            if proto in (PROTO_FTP, PROTO_FTPS, PROTO_SFTP):
+            if proto in (PROTO_FTP, PROTO_FTPS):
                 return await self._async_list_ftp()
             elif proto == PROTO_WEBDAV:
                 return await self._async_list_webdav()
@@ -782,7 +898,7 @@ class DomoLinkStorageEngine:
 
                                 clean_name = os.path.basename(name)
                                 items.append({
-                                    "backup_id": clean_name.replace(".tar", "").replace(".tar.gz", "").replace(".zip", ""),
+                                    "backup_id": clean_name.removesuffix(".tar.gz").removesuffix(".tar").removesuffix(".zip"),
                                     "name": clean_name,
                                     "filename": clean_name,
                                     "size": size,
@@ -809,12 +925,20 @@ class DomoLinkStorageEngine:
                                 size = ftp.size(raw_name) or 0
                             except Exception:
                                 pass
+                            file_date = datetime.now(timezone.utc).isoformat()
+                            try:
+                                mdtm_resp = ftp.sendcmd(f"MDTM {raw_name}")
+                                if mdtm_resp.startswith("213 ") and len(mdtm_resp.strip()) >= 18:
+                                    dt = datetime.strptime(mdtm_resp[4:].strip(), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+                                    file_date = dt.isoformat()
+                            except Exception:
+                                pass
                             items.append({
-                                "backup_id": clean_name.replace(".tar", "").replace(".tar.gz", "").replace(".zip", ""),
+                                "backup_id": clean_name.removesuffix(".tar.gz").removesuffix(".tar").removesuffix(".zip"),
                                 "name": clean_name,
                                 "filename": clean_name,
                                 "size": size,
-                                "date": datetime.now(timezone.utc).isoformat(),
+                                "date": file_date,
                                 "protocol": "ftp",
                             })
 
@@ -889,7 +1013,7 @@ class DomoLinkStorageEngine:
                         iso_date = datetime.now(timezone.utc).isoformat()
 
                     items.append({
-                        "backup_id": filename.replace(".tar", "").replace(".tar.gz", ""),
+                        "backup_id": filename.removesuffix(".tar.gz").removesuffix(".tar").removesuffix(".zip"),
                         "name": filename,
                         "filename": filename,
                         "size": size,
@@ -925,7 +1049,8 @@ class DomoLinkStorageEngine:
                         fname = b.get("name", "")
                         if fname.endswith((".tar", ".tar.gz", ".zip")):
                             result.append({
-                                "backup_id": b.get("id"),
+                                "backup_id": fname.removesuffix(".tar.gz").removesuffix(".tar").removesuffix(".zip"),
+                                "drive_file_id": b.get("id"),
                                 "name": fname,
                                 "filename": fname,
                                 "size": int(b.get("size", 0)),
@@ -951,7 +1076,7 @@ class DomoLinkStorageEngine:
                     stat = entry.stat()
                     dt = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
                     items.append({
-                        "backup_id": entry.name.replace(".tar", "").replace(".tar.gz", ""),
+                        "backup_id": entry.name.removesuffix(".tar.gz").removesuffix(".tar").removesuffix(".zip"),
                         "name": entry.name,
                         "filename": entry.name,
                         "size": stat.st_size,
@@ -968,18 +1093,23 @@ class DomoLinkStorageEngine:
         proto = self.protocol
         backups = await self.async_list_backups()
         target = next((b for b in backups if b["backup_id"] == backup_id or b["filename"] == backup_id), None)
+        if not target and proto != PROTO_LOCAL_SHARE:
+            raise FileNotFoundError(f"Sauvegarde introuvable sur le stockage distant : {backup_id}")
+
         filename = target["filename"] if target else f"{backup_id}.tar"
 
-        if proto in (PROTO_FTP, PROTO_FTPS, PROTO_SFTP):
+        if proto in (PROTO_FTP, PROTO_FTPS):
             temp_path = self.hass.config.path(f"domolink_dl_{filename}")
             await self._async_download_ftp(filename, temp_path)
-            return self._async_stream_local_file(temp_path)
+            return await self._async_stream_local_file(temp_path)
         elif proto == PROTO_WEBDAV:
             return await self._async_download_webdav_stream(filename)
         elif proto == PROTO_LOCAL_SHARE:
             dest_dir = self.config.get(CONF_LOCAL_SHARE_PATH, DEFAULT_LOCAL_SHARE_PATH)
             local_path = os.path.join(dest_dir, filename)
-            return self._async_stream_local_file(local_path, auto_delete=False)
+            if not os.path.exists(local_path):
+                raise FileNotFoundError(f"Sauvegarde locale introuvable : {local_path}")
+            return await self._async_stream_local_file(local_path, auto_delete=False)
         else:
             raise NotImplementedError(f"Téléchargement non supporté directement pour le protocole {proto}")
 
@@ -1059,21 +1189,39 @@ class DomoLinkStorageEngine:
         return _stream()
 
     # ─── Delete Backup ───
+    async def _async_delete_target(self, target: dict[str, Any]) -> bool:
+        """Delete target backup without re-listing."""
+        proto = self.protocol
+        filename = target.get("filename") or f"{target.get('backup_id')}.tar"
+        if proto in (PROTO_FTP, PROTO_FTPS):
+            return await self._async_delete_ftp(filename)
+        elif proto == PROTO_WEBDAV:
+            return await self._async_delete_webdav(filename)
+        elif proto == PROTO_GOOGLE_DRIVE:
+            file_id = target.get("drive_file_id") or target.get("backup_id")
+            return await self._async_delete_google_drive(file_id)
+        elif proto == PROTO_LOCAL_SHARE:
+            return await self._async_delete_local_share(filename)
+        return False
+
     async def async_delete_backup(self, backup_id: str) -> bool:
         """Delete a remote backup archive by ID or filename."""
         proto = self.protocol
         backups = await self.async_list_backups()
         target = next((b for b in backups if b["backup_id"] == backup_id or b["filename"] == backup_id), None)
+        if not target and proto != PROTO_LOCAL_SHARE:
+            raise FileNotFoundError(f"Sauvegarde introuvable sur le stockage distant : {backup_id}")
+
         filename = target["filename"] if target else f"{backup_id}.tar"
 
         _LOGGER.info("DomoLink-BackUp: Suppression de la sauvegarde distante %s (ID: %s)", filename, backup_id)
 
-        if proto in (PROTO_FTP, PROTO_FTPS, PROTO_SFTP):
+        if proto in (PROTO_FTP, PROTO_FTPS):
             return await self._async_delete_ftp(filename)
         elif proto == PROTO_WEBDAV:
             return await self._async_delete_webdav(filename)
         elif proto == PROTO_GOOGLE_DRIVE:
-            file_id = target.get("backup_id") if target else backup_id
+            file_id = target.get("drive_file_id") or target.get("backup_id") if target else backup_id
             return await self._async_delete_google_drive(file_id)
         elif proto == PROTO_LOCAL_SHARE:
             return await self._async_delete_local_share(filename)
@@ -1213,20 +1361,22 @@ class DomoLinkStorageEngine:
             to_delete.append(oldest)
             total_size_bytes -= oldest.get("size", 0)
 
-        # Execute deletions
+        # Execute deletions without redundant full listings
         deleted_count = 0
+        actually_deleted = []
         for b in to_delete:
-            success = await self.async_delete_backup(b.get("backup_id") or b.get("filename"))
+            success = await self._async_delete_target(b)
             if success:
                 deleted_count += 1
+                actually_deleted.append(b)
                 _LOGGER.info("DomoLink-BackUp: Purge automatique (rétention) de l'ancienne sauvegarde : %s", b.get("name"))
 
-        remaining_backups = [b for b in sorted_backups if b not in to_delete]
+        remaining_backups = [b for b in sorted_backups if b not in actually_deleted]
         remaining_size_mb = round(sum(b.get("size", 0) for b in remaining_backups) / (1024 * 1024), 2)
 
         return {
             "deleted_count": deleted_count,
             "remaining_count": len(remaining_backups),
             "total_size_mb": remaining_size_mb,
-            "purged_files": [b.get("name") for b in to_delete],
+            "purged_files": [b.get("name") for b in actually_deleted],
         }

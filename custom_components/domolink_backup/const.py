@@ -4,7 +4,7 @@ from __future__ import annotations
 DOMAIN = "domolink_backup"
 NAME = "DomoLink-BackUp"
 DEFAULT_NAME = "DomoLink-BackUp"
-VERSION = "1.0.2"
+VERSION = "1.1.0"
 
 # Storage key for persistent state
 STORAGE_KEY = "domolink_backup_data"
@@ -18,7 +18,6 @@ CONF_PROTOCOL = "protocol"
 # Protocol types
 PROTO_FTP = "ftp"
 PROTO_FTPS = "ftps"
-PROTO_SFTP = "sftp"
 PROTO_WEBDAV = "webdav"
 PROTO_GOOGLE_DRIVE = "google_drive"
 PROTO_LOCAL_SHARE = "local_share"
@@ -26,7 +25,6 @@ PROTO_LOCAL_SHARE = "local_share"
 PROTOCOLS = [
     PROTO_FTP,
     PROTO_FTPS,
-    PROTO_SFTP,
     PROTO_WEBDAV,
     PROTO_GOOGLE_DRIVE,
     PROTO_LOCAL_SHARE,

@@ -8,6 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, NAME, VERSION
 
@@ -33,14 +34,14 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class DomoLinkBaseButton(ButtonEntity):
+class DomoLinkBaseButton(CoordinatorEntity, ButtonEntity):
     """Base button for DomoLink-BackUp."""
 
     _attr_has_entity_name = True
 
     def __init__(self, coordinator, entry: ConfigEntry) -> None:
         """Initialize base button."""
-        self.coordinator = coordinator
+        super().__init__(coordinator)
         self.entry = entry
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
@@ -63,7 +64,10 @@ class DomoLinkBackupNowButton(DomoLinkBaseButton):
     async def async_press(self) -> None:
         """Press the button to create and upload backup."""
         _LOGGER.info("DomoLink-BackUp: Bouton 'Sauvegarder maintenant' pressé")
-        self.hass.async_create_task(self.coordinator.async_create_and_upload_backup())
+        self.hass.async_create_task(
+            self.coordinator.async_create_and_upload_backup(),
+            name=f"{DOMAIN}_backup_now",
+        )
 
 
 class DomoLinkTestConnectionButton(DomoLinkBaseButton):
@@ -78,7 +82,10 @@ class DomoLinkTestConnectionButton(DomoLinkBaseButton):
     async def async_press(self) -> None:
         """Press the button to run connection diagnostic."""
         _LOGGER.info("DomoLink-BackUp: Bouton 'Tester la connexion' pressé")
-        self.hass.async_create_task(self.coordinator.async_run_test_connection())
+        self.hass.async_create_task(
+            self.coordinator.async_run_test_connection(),
+            name=f"{DOMAIN}_test_connection",
+        )
 
 
 class DomoLinkCleanBackupsButton(DomoLinkBaseButton):
@@ -93,7 +100,10 @@ class DomoLinkCleanBackupsButton(DomoLinkBaseButton):
     async def async_press(self) -> None:
         """Press the button to purge old backups."""
         _LOGGER.info("DomoLink-BackUp: Bouton 'Nettoyer selon la rétention' pressé")
-        self.hass.async_create_task(self.coordinator.async_apply_retention())
+        self.hass.async_create_task(
+            self.coordinator.async_apply_retention(),
+            name=f"{DOMAIN}_clean_backups",
+        )
 
 
 class DomoLinkSyncBackupsButton(DomoLinkBaseButton):
@@ -108,4 +118,4 @@ class DomoLinkSyncBackupsButton(DomoLinkBaseButton):
     async def async_press(self) -> None:
         """Press the button to refresh remote backups."""
         _LOGGER.info("DomoLink-BackUp: Bouton 'Synchroniser les sauvegardes' pressé")
-        self.hass.async_create_task(self.coordinator.async_refresh_backups_list())
+        await self.coordinator.async_refresh_backups_list()
