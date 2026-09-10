@@ -21,9 +21,10 @@ except ImportError:
     StaticPathConfig = None  # type: ignore[assignment,misc]
 
 from homeassistant.components.websocket_api import (
-    async_register_command,
-    websocket_command,
     ActiveConnection,
+    async_register_command,
+    async_response,
+    websocket_command,
 )
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
@@ -579,6 +580,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         vol.Optional("name"): str,
         vol.Optional("include_database", default=True): bool,
     })
+    @async_response
     async def ws_trigger_backup(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
         coordinator = _get_active_coordinator(hass)
         if not coordinator:
@@ -586,10 +588,14 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
             return
         name = msg.get("name")
         include_db = msg.get("include_database", True)
-        hass.async_create_task(coordinator.async_create_and_upload_backup(name, include_db))
+        hass.async_create_task(
+            coordinator.async_create_and_upload_backup(name, include_db),
+            name=f"{DOMAIN}_ws_trigger_backup",
+        )
         connection.send_result(msg["id"], {"status": "started"})
 
     @websocket_command({vol.Required("type"): "domolink_backup/test_connection"})
+    @async_response
     async def ws_test_connection(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
         coordinator = _get_active_coordinator(hass)
         if not coordinator:
@@ -599,6 +605,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         connection.send_result(msg["id"], res)
 
     @websocket_command({vol.Required("type"): "domolink_backup/clean_backups"})
+    @async_response
     async def ws_clean_backups(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
         coordinator = _get_active_coordinator(hass)
         if not coordinator:
@@ -611,6 +618,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         vol.Required("type"): "domolink_backup/delete_backup",
         vol.Required("backup_id"): str,
     })
+    @async_response
     async def ws_delete_backup(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
         coordinator = _get_active_coordinator(hass)
         if not coordinator:
