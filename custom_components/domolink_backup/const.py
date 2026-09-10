@@ -4,7 +4,7 @@ from __future__ import annotations
 DOMAIN = "domolink_backup"
 NAME = "DomoLink-BackUp"
 DEFAULT_NAME = "DomoLink-BackUp"
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 
 # Storage key for persistent state
 STORAGE_KEY = "domolink_backup_data"
