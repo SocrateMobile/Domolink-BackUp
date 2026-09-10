@@ -1,11 +1,11 @@
 /**
- * DomoLink-BachUp Frontend Dashboard Panel
- * Sidebar Title: DomoLink-BachUp
+ * DomoLink-BackUp Frontend Dashboard Panel
+ * Sidebar Title: DomoLink-BackUp
  * Style: Modern DomoLink Glassmorphism Dark UI
  */
 
 const GOOGLE_SCRIPT_CODE = `/**
- * Script Google Apps Script pour DomoLink-BachUp
+ * Script Google Apps Script pour DomoLink-BackUp
  * Déployer en tant qu'Application Web :
  * - Exécuter en tant que : Moi (votre adresse Gmail)
  * - Qui a accès : Tout le monde (Anyone)
@@ -23,9 +23,9 @@ function doPost(e) {
         success: true, code: 200, message: "Connexion Google Drive validée avec succès."
       })).setMimeType(ContentService.MimeType.JSON);
     }
-    var folder = DriveApp.getFoldersByName("DomoLink-BachUp").hasNext() ? 
-                 DriveApp.getFoldersByName("DomoLink-BachUp").next() : 
-                 DriveApp.createFolder("DomoLink-BachUp");
+    var folder = DriveApp.getFoldersByName("DomoLink-BackUp").hasNext() ? 
+                 DriveApp.getFoldersByName("DomoLink-BackUp").next() : 
+                 DriveApp.createFolder("DomoLink-BackUp");
     if (data.action === "list") {
       var files = folder.getFiles();
       var list = [];
@@ -97,7 +97,7 @@ class DomoLinkBackupPanel extends HTMLElement {
         this._render();
       }
     } catch (err) {
-      if (!silent) console.error("DomoLink-BachUp: Erreur récupération données:", err);
+      if (!silent) console.error("DomoLink-BackUp: Erreur récupération données:", err);
     }
   }
 
@@ -111,7 +111,7 @@ class DomoLinkBackupPanel extends HTMLElement {
         name: name.trim() || undefined,
         include_database: true
       });
-      alert("🚀 Sauvegarde lancée ! DomoLink-BachUp la téléverse dès sa création.");
+      alert("🚀 Sauvegarde lancée ! DomoLink-BackUp la téléverse dès sa création.");
       this._fetchData();
     } catch (err) {
       alert("Erreur lors du déclenchement : " + err.message);
@@ -534,7 +534,7 @@ class DomoLinkBackupPanel extends HTMLElement {
           <div class="header-title-group">
             <div class="app-icon">💾</div>
             <div class="title-sub">
-              <h1 class="app-title">DomoLink-BachUp</h1>
+              <h1 class="app-title">DomoLink-BackUp</h1>
               <div class="app-subtitle">Stockage distant & haute sécurité pour Home Assistant • v1.0.0</div>
             </div>
           </div>
@@ -670,7 +670,7 @@ class DomoLinkBackupPanel extends HTMLElement {
         ${this._activeTab === 'config' ? `
           <div class="card">
             <div class="card-header">
-              <h2 class="card-title">Paramètres actifs de DomoLink-BachUp</h2>
+              <h2 class="card-title">Paramètres actifs de DomoLink-BackUp</h2>
             </div>
             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; font-size: 14px;">
               <div>
@@ -690,7 +690,7 @@ class DomoLinkBackupPanel extends HTMLElement {
             </div>
             <div style="margin-top: 20px; border-top: 1px solid rgba(255,255,255,0.08); padding-top: 16px;">
               <p style="font-size: 13px; color: #94a3b8; margin-bottom: 12px;">
-                Pour modifier ces réglages (changer de serveur, adapter les quotas ou ajuster Telegram), rendez-vous dans <b>Paramètres > Appareils et services > DomoLink-BachUp > Configurer</b>.
+                Pour modifier ces réglages (changer de serveur, adapter les quotas ou ajuster Telegram), rendez-vous dans <b>Paramètres > Appareils et services > DomoLink-BackUp > Configurer</b>.
               </p>
               <button class="btn btn-secondary" id="btn-retest-cfg">
                 ⚡ Tester les identifiants actuels
@@ -729,7 +729,7 @@ class DomoLinkBackupPanel extends HTMLElement {
             </div>
             <p style="font-size: 13px; color: #94a3b8; margin-bottom: 12px;">
               Collez ce code dans <a href="https://script.google.com" target="_blank" style="color: #60a5fa;">script.google.com</a>, 
-              déployez-le en <b>Application Web</b> (accès : <i>Tout le monde</i>) et reportez l'URL du Webhook dans la configuration de DomoLink-BachUp !
+              déployez-le en <b>Application Web</b> (accès : <i>Tout le monde</i>) et reportez l'URL du Webhook dans la configuration de DomoLink-BackUp !
             </p>
             <pre><code>${GOOGLE_SCRIPT_CODE}</code></pre>
           </div>

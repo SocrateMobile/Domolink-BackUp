@@ -1,10 +1,10 @@
-# 💾 DomoLink-BachUp pour Home Assistant
+# 💾 DomoLink-BackUp pour Home Assistant
 
 [![HACS Compatible](https://img.shields.io/badge/HACS-Custom-blue.svg)](https://github.com/SocrateMobile/Domolink-BackUp)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 
-Dans la lignée directe de **DomoLink-Alarm** et **DomoLink-Mistral IA**, **DomoLink-BachUp** est une intégration Home Assistant puissante et clé en main dédiée au **stockage distant, automatique et sécurisé des sauvegardes de votre domotique**.
+Dans la lignée directe de **DomoLink-Alarm** et **DomoLink-Mistral IA**, **DomoLink-BackUp** est une intégration Home Assistant puissante et clé en main dédiée au **stockage distant, automatique et sécurisé des sauvegardes de votre domotique**.
 
 Elle reprend l'ergonomie, la mécanique et le paramétrage éprouvés de la suite DomoLink (profils NAS Asustor, Synology, QNAP, TrueNAS, Freebox, Unraid, transferts FTP/FTPS, WebDAV/Nextcloud, Google Drive sans clé API complexe, alertes Telegram et purge FIFO automatique).
 
@@ -14,7 +14,7 @@ Elle reprend l'ergonomie, la mécanique et le paramétrage éprouvés de la suit
 
 ### 🛡️ 1. Agent de Sauvegarde Officiel Home Assistant (`BackupAgent`)
 - S'enregistre directement dans le gestionnaire de sauvegarde natif de Home Assistant (*Paramètres > Système > Sauvegardes*).
-- Vos sauvegardes automatiques ou manuelles peuvent être dirigées directement vers **DomoLink-BachUp** comme emplacement de stockage distant, avec barre de progression en temps réel.
+- Vos sauvegardes automatiques ou manuelles peuvent être dirigées directement vers **DomoLink-BackUp** comme emplacement de stockage distant, avec barre de progression en temps réel.
 - Permet la consultation, le téléchargement et la suppression des archives distantes directement depuis l'interface native de Home Assistant.
 
 ### 🖧 2. Profils NAS & Multi-Destinations
@@ -41,7 +41,7 @@ Elle reprend l'ergonomie, la mécanique et le paramétrage éprouvés de la suit
   - Espace total occupé et nombre de sauvegardes sur le serveur distant
 - Alerte immédiate en cas d'échec avec description et code diagnostic d'erreur.
 
-### 🎛️ 5. Panneau Interactif dans la Barre Latérale (`DomoLink-BachUp`)
+### 🎛️ 5. Panneau Interactif dans la Barre Latérale (`DomoLink-BackUp`)
 Un tableau de bord complet reprenant l'élégance de l'univers DomoLink (thème sombre, Glassmorphism, animations de statut) :
 - **📊 Tableau de bord** : Jauge de quota d'espace, carte de la dernière sauvegarde, statistiques en direct et boutons d'action rapide.
 - **🗄️ Sauvegardes Distantes** : Explorateur des archives hébergées sur le NAS/Cloud avec date, taille et suppression individuelle.
@@ -57,12 +57,12 @@ Un tableau de bord complet reprenant l'élégance de l'univers DomoLink (thème 
 2. Rendez-vous dans **Intégrations** > Menu ⋮ (en haut à droite) > **Dépôts personnalisés**.
 3. Ajoutez l'URL de votre dépôt : `https://github.com/SocrateMobile/Domolink-BackUp` avec la catégorie **Intégration**.
 4. Cliquez sur **Installer**, puis redémarrez Home Assistant.
-5. Allez dans **Paramètres > Appareils et services > Ajouter une intégration**, puis sélectionnez **DomoLink-BachUp**.
+5. Allez dans **Paramètres > Appareils et services > Ajouter une intégration**, puis sélectionnez **DomoLink-BackUp**.
 
 ### Méthode 2 : Installation Manuelle
 1. Copiez le dossier `custom_components/domolink_backup` dans votre répertoire `config/custom_components/` de Home Assistant.
 2. Redémarrez Home Assistant.
-3. Allez dans **Paramètres > Appareils et services > Ajouter une intégration** et recherchez **DomoLink-BachUp**.
+3. Allez dans **Paramètres > Appareils et services > Ajouter une intégration** et recherchez **DomoLink-BackUp**.
 
 ---
 
@@ -85,7 +85,7 @@ Lors de l'ajout de l'intégration, un assistant interactif en 4 étapes vous gui
 
 La méthode Webhook Google Apps Script évite la complexité des clés OAuth2 :
 
-1. Ouvrez le panneau **DomoLink-BachUp** dans votre barre latérale Home Assistant.
+1. Ouvrez le panneau **DomoLink-BackUp** dans votre barre latérale Home Assistant.
 2. Rendez-vous sur l'onglet **🧪 Diagnostics & Guide** et cliquez sur **« 📋 Copier le Google Script »**.
 3. Rendez-vous sur [script.google.com](https://script.google.com) et créez un **Nouveau projet**.
 4. Remplacez le code existant par le script copié.
@@ -93,7 +93,7 @@ La méthode Webhook Google Apps Script évite la complexité des clés OAuth2 :
    - **Exécuter en tant que** : *Moi (votre adresse Gmail)*
    - **Qui a accès** : *Tout le monde (Anyone)*
 6. Cliquez sur **Déployer**, autorisez l'accès à Google Drive, puis copiez l'URL de l'application Web (se terminant par `/exec`).
-7. Collez cette URL dans la configuration de DomoLink-BachUp.
+7. Collez cette URL dans la configuration de DomoLink-BackUp.
 
 ---
 
@@ -130,7 +130,7 @@ La méthode Webhook Google Apps Script évite la complexité des clés OAuth2 :
 
 ### Sauvegarde automatique hebdomadaire avec envoi vers le NAS
 ```yaml
-alias: "DomoLink-BachUp - Sauvegarde hebdomadaire du Dimanche"
+alias: "DomoLink-BackUp - Sauvegarde hebdomadaire du Dimanche"
 description: "Déclenche la sauvegarde automatique et l'envoi hors-site sur le NAS"
 trigger:
   - platform: time

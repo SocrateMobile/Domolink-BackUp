@@ -1,6 +1,6 @@
 create_backup:
   name: Créer et téléverser une sauvegarde
-  description: Déclenche la création d'une sauvegarde Home Assistant et la téléverse immédiatement vers votre destination distante DomoLink-BachUp (NAS, WebDAV, Google Drive, Partage Réseau).
+  description: Déclenche la création d'une sauvegarde Home Assistant et la téléverse immédiatement vers votre destination distante DomoLink-BackUp (NAS, WebDAV, Google Drive, Partage Réseau).
   fields:
     name:
       name: Nom de la sauvegarde

@@ -1,4 +1,4 @@
-"""Config Flow and Options Flow for DomoLink-BachUp."""
+"""Config Flow and Options Flow for DomoLink-BackUp."""
 from __future__ import annotations
 
 import logging
@@ -64,7 +64,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class DomoLinkBackupConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for DomoLink-BachUp."""
+    """Handle a config flow for DomoLink-BackUp."""
 
     VERSION = 1
 
@@ -129,7 +129,7 @@ class DomoLinkBackupConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             test_engine = DomoLinkStorageEngine(self.hass, self.data)
             test_res = await test_engine.async_test_connection()
             if not test_res.get("success"):
-                _LOGGER.warning("DomoLink-BachUp: Avertissement connexion lors du setup: %s", test_res.get("message"))
+                _LOGGER.warning("DomoLink-BackUp: Avertissement connexion lors du setup: %s", test_res.get("message"))
                 # Note: we do not block the user, but we proceed to retention with a warning logged
 
             return await self.async_step_retention()
@@ -228,7 +228,7 @@ class DomoLinkBackupConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class DomoLinkBackupOptionsFlow(config_entries.OptionsFlow):
-    """Handle options flow for DomoLink-BachUp."""
+    """Handle options flow for DomoLink-BackUp."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""

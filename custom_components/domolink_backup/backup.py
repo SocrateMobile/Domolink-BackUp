@@ -1,6 +1,6 @@
-"""Native Home Assistant BackupAgent platform for DomoLink-BachUp.
+"""Native Home Assistant BackupAgent platform for DomoLink-BackUp.
 
-Registers DomoLink-BachUp directly into Home Assistant's Backup Manager
+Registers DomoLink-BackUp directly into Home Assistant's Backup Manager
 (Settings > System > Backups) as an official remote backup destination.
 """
 from __future__ import annotations
@@ -83,7 +83,7 @@ def _create_agent_backup(backup_id: str, name: str, date: str, size: int) -> Age
 
 
 class DomoLinkBackupAgent(BackupAgent):
-    """Home Assistant Backup Agent implementation for DomoLink-BachUp."""
+    """Home Assistant Backup Agent implementation for DomoLink-BackUp."""
 
     domain: str = DOMAIN
 
@@ -109,7 +109,7 @@ class DomoLinkBackupAgent(BackupAgent):
         """Return metadata for a specific backup."""
         engine = self._storage_engine
         if not engine:
-            raise BackupAgentError("Moteur de stockage DomoLink-BachUp non initialisé")
+            raise BackupAgentError("Moteur de stockage DomoLink-BackUp non initialisé")
 
         backups = await engine.async_list_backups()
         target = next((b for b in backups if b["backup_id"] == backup_id or b["filename"] == backup_id), None)
@@ -142,7 +142,7 @@ class DomoLinkBackupAgent(BackupAgent):
                     )
                 )
             except Exception as err:
-                _LOGGER.debug("DomoLink-BachUp: Impossible de convertir la sauvegarde %s : %s", b, err)
+                _LOGGER.debug("DomoLink-BackUp: Impossible de convertir la sauvegarde %s : %s", b, err)
         return result
 
     async def async_upload_backup(
@@ -158,13 +158,13 @@ class DomoLinkBackupAgent(BackupAgent):
         notifier = self._notifier
 
         if not engine:
-            raise BackupAgentError("Moteur de stockage DomoLink-BachUp non disponible")
+            raise BackupAgentError("Moteur de stockage DomoLink-BackUp non disponible")
 
         filename = f"{backup.backup_id}.tar"
         size = getattr(backup, "size", 0)
         start_time = time.monotonic()
 
-        _LOGGER.info("DomoLink-BachUp: Début de l'envoi de la sauvegarde officielle '%s' (ID: %s)", backup.name, backup.backup_id)
+        _LOGGER.info("DomoLink-BackUp: Début de l'envoi de la sauvegarde officielle '%s' (ID: %s)", backup.name, backup.backup_id)
 
         # Notify start if enabled
         if notifier:
@@ -208,7 +208,7 @@ class DomoLinkBackupAgent(BackupAgent):
                 )
 
         except Exception as err:
-            _LOGGER.exception("DomoLink-BachUp: Exception pendant async_upload_backup: %s", err)
+            _LOGGER.exception("DomoLink-BackUp: Exception pendant async_upload_backup: %s", err)
             if notifier:
                 self.hass.async_create_task(
                     notifier.async_notify_error(
@@ -217,7 +217,7 @@ class DomoLinkBackupAgent(BackupAgent):
                         error_message=str(err),
                     )
                 )
-            raise BackupAgentError(f"Erreur d'envoi DomoLink-BachUp : {err}") from err
+            raise BackupAgentError(f"Erreur d'envoi DomoLink-BackUp : {err}") from err
 
     async def async_download_backup(self, backup_id: str, **kwargs: Any) -> AsyncIterator[bytes]:
         """Download a backup file as an asynchronous stream."""
@@ -244,7 +244,7 @@ class DomoLinkBackupAgent(BackupAgent):
 
 
 async def async_get_backup_agents(hass: HomeAssistant) -> list[BackupAgent]:
-    """Return all active DomoLink-BachUp backup agents."""
+    """Return all active DomoLink-BackUp backup agents."""
     agents: list[BackupAgent] = []
     domain_data = hass.data.get(DOMAIN, {})
     for entry_id, entry_data in domain_data.items():
@@ -278,4 +278,4 @@ def notify_backup_agents_updated(hass: HomeAssistant) -> None:
         try:
             listener()
         except Exception as err:
-            _LOGGER.warning("DomoLink-BachUp: Erreur lors de l'appel du listener de backup agent : %s", err)
+            _LOGGER.warning("DomoLink-BackUp: Erreur lors de l'appel du listener de backup agent : %s", err)

@@ -1,4 +1,4 @@
-"""Sensors for the DomoLink-BachUp integration."""
+"""Sensors for the DomoLink-BackUp integration."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -32,7 +32,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up DomoLink-BachUp sensor platform from config entry."""
+    """Set up DomoLink-BackUp sensor platform from config entry."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator = data["coordinator"]
 
@@ -49,7 +49,7 @@ async def async_setup_entry(
 
 
 class DomoLinkBaseSensor(CoordinatorEntity, SensorEntity):
-    """Base sensor for DomoLink-BachUp."""
+    """Base sensor for DomoLink-BackUp."""
 
     _attr_has_entity_name = True
 

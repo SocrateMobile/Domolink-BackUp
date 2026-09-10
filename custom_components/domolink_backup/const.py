@@ -1,9 +1,9 @@
-"""Constants for the DomoLink-BachUp integration."""
+"""Constants for the DomoLink-BackUp integration."""
 from __future__ import annotations
 
 DOMAIN = "domolink_backup"
-NAME = "DomoLink-BachUp"
-DEFAULT_NAME = "DomoLink-BachUp"
+NAME = "DomoLink-BackUp"
+DEFAULT_NAME = "DomoLink-BackUp"
 VERSION = "1.0.0"
 
 # Storage key for persistent state
@@ -203,7 +203,7 @@ SERVICE_SYNC_BACKUPS = "sync_backups"
 
 # Google Apps Script Source Template
 GOOGLE_APPS_SCRIPT_TEMPLATE = """/**
- * Script Google Apps Script pour DomoLink-BachUp
+ * Script Google Apps Script pour DomoLink-BackUp
  * Déployer en tant qu'Application Web :
  * - Exécuter en tant que : Moi (votre adresse Gmail)
  * - Qui a accès : Tout le monde (Anyone)
@@ -220,13 +220,13 @@ function doPost(e) {
 
     var data = JSON.parse(e.postData.contents);
 
-    // 1. Sonde de test diagnostic DomoLink-BachUp
+    // 1. Sonde de test diagnostic DomoLink-BackUp
     if (data.probe === true) {
       return ContentService.createTextOutput(JSON.stringify({
         success: true,
         code: 200,
         message: "Connexion Google Drive validée avec succès.",
-        folder_name: "DomoLink-BachUp"
+        folder_name: "DomoLink-BackUp"
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
@@ -241,11 +241,11 @@ function doPost(e) {
       }
     }
     if (!folder) {
-      var folders = DriveApp.getFoldersByName("DomoLink-BachUp");
+      var folders = DriveApp.getFoldersByName("DomoLink-BackUp");
       if (folders.hasNext()) {
         folder = folders.next();
       } else {
-        folder = DriveApp.createFolder("DomoLink-BachUp");
+        folder = DriveApp.createFolder("DomoLink-BackUp");
       }
     }
 
