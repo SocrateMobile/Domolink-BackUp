@@ -9,6 +9,11 @@ from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 
+try:
+    from homeassistant.config_entries import ConfigFlowResult
+except ImportError:
+    ConfigFlowResult = Any  # type: ignore[misc,assignment]
+
 from .const import (
     CONF_AUTO_CLEAN_ENABLED,
     CONF_FTP_HOST,
@@ -67,8 +72,11 @@ class DomoLinkBackupConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize flow state."""
         self.data: dict[str, Any] = {}
 
-    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> config_entries.ConfigFlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Step 1: Choose destination type and protocol."""
+        await self.async_set_unique_id(DOMAIN)
+        self._abort_if_unique_id_configured()
+
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -107,7 +115,7 @@ class DomoLinkBackupConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
-    async def async_step_credentials(self, user_input: dict[str, Any] | None = None) -> config_entries.ConfigFlowResult:
+    async def async_step_credentials(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Step 2: Enter credentials and connection parameters with NAS presets."""
         errors: dict[str, str] = {}
 
@@ -182,7 +190,7 @@ class DomoLinkBackupConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(step_id="credentials", data_schema=vol.Schema(schema_dict), errors=errors)
 
-    async def async_step_retention(self, user_input: dict[str, Any] | None = None) -> config_entries.ConfigFlowResult:
+    async def async_step_retention(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Step 3: Configure backup retention rules (FIFO)."""
         errors: dict[str, str] = {}
 
@@ -201,7 +209,7 @@ class DomoLinkBackupConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(step_id="retention", data_schema=schema, errors=errors)
 
-    async def async_step_telegram(self, user_input: dict[str, Any] | None = None) -> config_entries.ConfigFlowResult:
+    async def async_step_telegram(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Step 4: Optional Telegram alerts configuration."""
         errors: dict[str, str] = {}
 
@@ -240,11 +248,11 @@ class DomoLinkBackupOptionsFlow(config_entries.OptionsFlow):
         self.config_entry = config_entry
         self.options: dict[str, Any] = dict(config_entry.options or config_entry.data)
 
-    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> config_entries.ConfigFlowResult:
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Entry point for options flow."""
         return await self.async_step_destination()
 
-    async def async_step_destination(self, user_input: dict[str, Any] | None = None) -> config_entries.ConfigFlowResult:
+    async def async_step_destination(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Modify destination & protocol."""
         if user_input is not None:
             self.options.update(user_input)
@@ -284,7 +292,7 @@ class DomoLinkBackupOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(step_id="destination", data_schema=schema)
 
-    async def async_step_credentials(self, user_input: dict[str, Any] | None = None) -> config_entries.ConfigFlowResult:
+    async def async_step_credentials(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Modify credentials."""
         proto = self.options.get(CONF_PROTOCOL, PROTO_FTP)
         nas_type = self.options.get(CONF_NAS_TYPE, NAS_GENERIC)
@@ -342,7 +350,7 @@ class DomoLinkBackupOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(step_id="credentials", data_schema=vol.Schema(schema_dict))
 
-    async def async_step_retention(self, user_input: dict[str, Any] | None = None) -> config_entries.ConfigFlowResult:
+    async def async_step_retention(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Modify retention rules."""
         if user_input is not None:
             self.options.update(user_input)
@@ -359,7 +367,7 @@ class DomoLinkBackupOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(step_id="retention", data_schema=schema)
 
-    async def async_step_telegram(self, user_input: dict[str, Any] | None = None) -> config_entries.ConfigFlowResult:
+    async def async_step_telegram(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Modify Telegram settings and finalize."""
         if user_input is not None:
             self.options.update(user_input)
@@ -379,3 +387,6 @@ class DomoLinkBackupOptionsFlow(config_entries.OptionsFlow):
         )
 
         return self.async_show_form(step_id="telegram", data_schema=schema)
+
+
+CONFIG_FLOW = DomoLinkBackupConfigFlow

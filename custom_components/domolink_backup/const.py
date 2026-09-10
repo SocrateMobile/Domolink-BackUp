@@ -4,7 +4,7 @@ from __future__ import annotations
 DOMAIN = "domolink_backup"
 NAME = "DomoLink-BackUp"
 DEFAULT_NAME = "DomoLink-BackUp"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 
 # Storage key for persistent state
 STORAGE_KEY = "domolink_backup_data"
@@ -189,6 +189,7 @@ STATE_IDLE = "Prêt"
 STATE_BACKING_UP = "Sauvegarde en cours"
 STATE_UPLOADING = "Téléversement en cours"
 STATE_CLEANING = "Nettoyage en cours"
+STATE_TESTING = "Test en cours"
 STATE_SUCCESS = "Succès"
 STATE_ERROR = "Erreur"
 

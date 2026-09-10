@@ -1,7 +1,7 @@
 # 💾 DomoLink-BackUp pour Home Assistant
 
 [![HACS Compatible](https://img.shields.io/badge/HACS-Custom-blue.svg)](https://github.com/SocrateMobile/Domolink-BackUp)
-[![Version](https://img.shields.io/badge/version-1.1.0-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
+[![Version](https://img.shields.io/badge/version-1.1.1-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 
 Dans la lignée directe de **DomoLink-Alarm** et **DomoLink-Mistral IA**, **DomoLink-BackUp** est une intégration Home Assistant puissante et clé en main dédiée au **stockage distant, automatique et sécurisé des sauvegardes de votre domotique**.
