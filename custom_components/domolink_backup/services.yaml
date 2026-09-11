@@ -14,6 +14,33 @@ create_backup:
       default: true
       selector:
         boolean:
+    backup_type:
+      name: "Type de sauvegarde"
+      description: "Sauvegarde complète de tout le système ('full') ou sauvegarde partielle / incrémentielle sélective ('partial')."
+      default: "full"
+      selector:
+        select:
+          options:
+            - label: "Sauvegarde Complète (Full)"
+              value: "full"
+            - label: "Sauvegarde Partielle / Incrémentielle (Partial)"
+              value: "partial"
+    homeassistant:
+      name: "Inclure Home Assistant Core"
+      description: "Inclure la configuration et les automatisations de Home Assistant dans la sauvegarde partielle."
+      default: true
+      selector:
+        boolean:
+    addons:
+      name: "Modules complémentaires (Add-ons)"
+      description: "Liste des slugs d'add-ons à inclure dans la sauvegarde partielle (ex: ['core_mosquitto'])."
+      selector:
+        object:
+    folders:
+      name: "Dossiers partagés"
+      description: "Liste des répertoires partagés à inclure (ex: ['share', 'ssl', 'media'])."
+      selector:
+        object:
 
 upload_backup:
   name: "Téléverser un fichier de sauvegarde"
@@ -41,7 +68,7 @@ sync_backups:
 
 restore_backup:
   name: "Restaurer ou rapatrier une sauvegarde"
-  description: "Télécharge une archive distante vers Home Assistant et peut soit l'enregistrer dans les sauvegardes du système, soit déclencher la restauration complète."
+  description: "Télécharge une archive distante vers Home Assistant et peut soit l'enregistrer dans les sauvegardes du système, soit déclencher la restauration complète ou partielle."
   fields:
     filename:
       name: "Nom du fichier d'archive"
@@ -52,7 +79,7 @@ restore_backup:
         text:
     restore_mode:
       name: "Mode de restauration"
-      description: "Choisissez entre rapatrier vers Home Assistant ('download_only') ou exécuter une restauration complète ('full_restore')."
+      description: "Rapatrier vers Home Assistant ('download_only'), restauration complète ('full_restore') ou restauration partielle ('partial_restore')."
       default: "download_only"
       selector:
         select:
@@ -61,3 +88,21 @@ restore_backup:
               value: "download_only"
             - label: "Restauration complète du système"
               value: "full_restore"
+            - label: "Restauration partielle / incrémentielle (sélective)"
+              value: "partial_restore"
+    restore_homeassistant:
+      name: "Restaurer Home Assistant Core"
+      description: "Restaurer la configuration et les automatisations de Home Assistant."
+      default: true
+      selector:
+        boolean:
+    restore_addons:
+      name: "Restaurer les Add-ons"
+      description: "Liste des slugs d'add-ons à restaurer."
+      selector:
+        object:
+    restore_folders:
+      name: "Restaurer les dossiers"
+      description: "Liste des dossiers à restaurer."
+      selector:
+        object:

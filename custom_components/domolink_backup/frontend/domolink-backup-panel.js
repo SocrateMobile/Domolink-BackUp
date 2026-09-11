@@ -95,16 +95,27 @@ class DomoLinkBackupPanel extends HTMLElement {
     this._hass = null;
     this._data = {};
     this._config = {};
-    this._version = "1.3.0";
+    this._version = "1.4.0";
     this._activeTab = "dashboard";
     this._refreshTimer = null;
     this._showBackupModal = false;
     this._showReport = true;
     this._modalBackupName = "";
+    this._modalBackupType = "full";
+    this._modalIncludeHa = true;
     this._modalIncludeDb = true;
+    this._modalSelectedAddons = new Set();
+    this._modalSelectedFolders = new Set(["share", "ssl", "media"]);
+    this._installedAddons = [];
+    this._availableFolders = [];
+
     this._showRestoreModal = false;
     this._restoreModalBackup = null;
     this._restoreMode = "download_only";
+    this._restoreIncludeHa = true;
+    this._restoreIncludeAddons = true;
+    this._restoreIncludeFolders = true;
+
     this._templateInputVal = "";
     this._templateSavedNotice = "";
     this._localPathInputVal = "";
@@ -155,6 +166,9 @@ class DomoLinkBackupPanel extends HTMLElement {
         this._config = resp.config || {};
         if (resp.version) this._version = resp.version;
 
+        if (resp.installed_addons) this._installedAddons = resp.installed_addons;
+        if (resp.available_folders) this._availableFolders = resp.available_folders;
+
         if (!this._templateInputVal) {
           this._templateInputVal = this._data.backup_name_template || this._config.backup_name_template || DEFAULT_TEMPLATE;
         }
@@ -177,9 +191,13 @@ class DomoLinkBackupPanel extends HTMLElement {
   }
 
   _openBackupModal() {
+    this._modalBackupType = "full";
+    this._modalIncludeHa = true;
+    this._modalIncludeDb = true;
+    this._modalSelectedAddons = new Set((this._installedAddons || []).map(a => a.slug));
+    this._modalSelectedFolders = new Set((this._availableFolders || []).map(f => f.id));
     const currentTpl = this._data.backup_name_template || this._config.backup_name_template || DEFAULT_TEMPLATE;
     this._modalBackupName = evaluateTemplate(currentTpl, "MANUEL");
-    this._modalIncludeDb = true;
     this._showBackupModal = true;
     this._render();
   }
@@ -193,16 +211,27 @@ class DomoLinkBackupPanel extends HTMLElement {
     if (!this._hass) return;
     const name = this._modalBackupName.trim();
     const includeDb = this._modalIncludeDb;
+    const backupType = this._modalBackupType || "full";
+    const mode = backupType === "partial" ? "PARTIEL" : "MANUEL";
     this._closeBackupModal();
     this._showReport = true;
+    this._activeTab = "dashboard";
+    this._render();
 
     try {
-      await this._hass.callWS({
+      const payload = {
         type: "domolink_backup/trigger_backup",
         name: name || undefined,
         include_database: includeDb,
-        mode: "MANUEL",
-      });
+        mode: mode,
+        backup_type: backupType,
+      };
+      if (backupType === "partial") {
+        payload.homeassistant = this._modalIncludeHa;
+        payload.addons = Array.from(this._modalSelectedAddons);
+        payload.folders = Array.from(this._modalSelectedFolders);
+      }
+      await this._hass.callWS(payload);
       this._fetchData();
       this._scheduleRefresh();
     } catch (err) {
@@ -213,6 +242,9 @@ class DomoLinkBackupPanel extends HTMLElement {
   _openRestoreModal(backup) {
     this._restoreModalBackup = backup;
     this._restoreMode = "download_only";
+    this._restoreIncludeHa = true;
+    this._restoreIncludeAddons = true;
+    this._restoreIncludeFolders = true;
     this._showRestoreModal = true;
     this._render();
   }
@@ -234,11 +266,17 @@ class DomoLinkBackupPanel extends HTMLElement {
     this._render();
 
     try {
-      await this._hass.callWS({
+      const payload = {
         type: "domolink_backup/restore_backup",
         filename: filename,
         restore_mode: restoreMode,
-      });
+      };
+      if (restoreMode === "partial_restore") {
+        payload.restore_homeassistant = this._restoreIncludeHa;
+        payload.restore_addons = this._restoreIncludeAddons ? undefined : [];
+        payload.restore_folders = this._restoreIncludeFolders ? undefined : [];
+      }
+      await this._hass.callWS(payload);
       this._fetchData();
       this._scheduleRefresh();
     } catch (err) {
@@ -963,6 +1001,52 @@ class DomoLinkBackupPanel extends HTMLElement {
           user-select: none;
         }
 
+        .backup-type-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 12px;
+          margin-bottom: 16px;
+        }
+
+        .backup-type-card {
+          padding: 14px;
+          background: rgba(255, 255, 255, 0.03);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 10px;
+          cursor: pointer;
+          transition: all 0.2s;
+          display: flex;
+          align-items: flex-start;
+          gap: 10px;
+        }
+
+        .backup-type-card:hover {
+          background: rgba(255, 255, 255, 0.06);
+        }
+
+        .backup-type-card.active {
+          background: rgba(59, 130, 246, 0.15);
+          border-color: #3b82f6;
+        }
+
+        .components-box {
+          background: rgba(0, 0, 0, 0.25);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 8px;
+          padding: 14px;
+          margin-bottom: 16px;
+        }
+
+        .components-scroll {
+          max-height: 150px;
+          overflow-y: auto;
+          margin-top: 8px;
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          padding-right: 4px;
+        }
+
         /* Scan Results Table / Box */
         .scan-results-box {
           margin-top: 16px;
@@ -1554,17 +1638,41 @@ class DomoLinkBackupPanel extends HTMLElement {
       <!-- MODAL POPIN: SAUVEGARDER MAINTENANT -->
       ${this._showBackupModal ? `
         <div class="modal-overlay" id="modal-overlay">
-          <div class="modal-card">
+          <div class="modal-card" style="max-width: 620px;">
             <div class="modal-header">
               <h3 class="modal-title">🚀 Nouvelle sauvegarde Home Assistant</h3>
               <button class="btn btn-secondary" id="btn-close-modal" style="padding: 4px 10px; font-size: 12px;">✕</button>
             </div>
             <div class="modal-body">
-              <p style="font-size: 13px; color: #94a3b8; margin-top: 0; margin-bottom: 16px;">
-                Vérifiez ou personnalisez le nom avant de lancer la création locale et le téléversement distant vers votre cible sécurisée.
+              <p style="font-size: 13px; color: #94a3b8; margin-top: 0; margin-bottom: 14px;">
+                Choisissez le type de sauvegarde et personnalisez les composants inclus avant le transfert distant sécurisé.
               </p>
 
-              <div class="form-group">
+              <!-- TYPE SELECTOR: COMPLÈTE VS INCRÉMENTIELLE / PARTIELLE -->
+              <div class="backup-type-grid" style="margin-bottom: 16px;">
+                <div class="backup-type-card ${this._modalBackupType === 'full' ? 'active' : ''}" id="card-backup-full">
+                  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+                    <span style="font-weight: 700; color: #38bdf8; font-size: 14px;">🟢 Complète (Full)</span>
+                    <input type="radio" name="modal_backup_type_radio" value="full" id="radio-btype-full" ${this._modalBackupType === 'full' ? 'checked' : ''}>
+                  </div>
+                  <div style="font-size: 11px; color: #94a3b8; line-height: 1.4;">
+                    Sauvegarde l'intégralité du système : Core, base de données, tous les modules (add-ons) et dossiers partagés.
+                  </div>
+                </div>
+
+                <div class="backup-type-card ${this._modalBackupType === 'partial' ? 'active' : ''}" id="card-backup-partial">
+                  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+                    <span style="font-weight: 700; color: #fbbf24; font-size: 14px;">🟡 Incrémentielle / Partielle</span>
+                    <input type="radio" name="modal_backup_type_radio" value="partial" id="radio-btype-partial" ${this._modalBackupType === 'partial' ? 'checked' : ''}>
+                  </div>
+                  <div style="font-size: 11px; color: #94a3b8; line-height: 1.4;">
+                    Sélection ciblée des éléments : Core, YAML, add-ons spécifiques ou dossiers. Plus rapide, archive allégée.
+                  </div>
+                </div>
+              </div>
+
+              <!-- NOM DE LA SAUVEGARDE -->
+              <div class="form-group" style="margin-bottom: 14px;">
                 <label class="form-label" for="modal-backup-input">Nom de la sauvegarde :</label>
                 <input type="text" id="modal-backup-input" class="text-input" value="${this._modalBackupName}">
 
@@ -1576,16 +1684,81 @@ class DomoLinkBackupPanel extends HTMLElement {
                 </div>
               </div>
 
-              <div class="form-group" style="margin-bottom: 8px;">
-                <label class="checkbox-label">
-                  <input type="checkbox" id="modal-check-db" ${this._modalIncludeDb ? 'checked' : ''}>
-                  <span>Inclure la base de données (enregistreur & historique)</span>
-                </label>
-              </div>
+              <!-- SI PARTIELLE : SELECTION DES COMPOSANTS -->
+              ${this._modalBackupType === 'partial' ? `
+                <div class="components-box">
+                  <div style="font-size: 13px; font-weight: 700; color: #fbbf24; margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+                    <span>🧩 Sélection des composants à inclure :</span>
+                  </div>
+
+                  <!-- CORE & DATABASE -->
+                  <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.06);">
+                    <label class="checkbox-label">
+                      <input type="checkbox" id="modal-check-ha" ${this._modalIncludeHa ? 'checked' : ''}>
+                      <span style="font-weight: 600; color: #f8fafc;">🏠 Configuration Home Assistant Core (YAML, automations, scènes)</span>
+                    </label>
+
+                    <label class="checkbox-label" style="margin-left: 24px;">
+                      <input type="checkbox" id="modal-check-db" ${this._modalIncludeDb ? 'checked' : ''}>
+                      <span style="color: #94a3b8; font-size: 12px;">🗄️ Inclure la base de données historique (recommandé de décocher pour accélérer)</span>
+                    </label>
+                  </div>
+
+                  <!-- ADD-ONS -->
+                  <div style="margin-bottom: 12px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                      <span style="font-size: 12px; font-weight: 600; color: #e2e8f0;">📦 Modules complémentaires (Add-ons) :</span>
+                      ${this._installedAddons && this._installedAddons.length > 0 ? `
+                        <button type="button" class="btn btn-secondary" id="btn-toggle-all-addons" style="padding: 2px 8px; font-size: 11px;">
+                          ${this._modalSelectedAddons.length === this._installedAddons.length ? 'Tout décocher' : 'Tout cocher'}
+                        </button>
+                      ` : ''}
+                    </div>
+                    ${this._installedAddons && this._installedAddons.length > 0 ? `
+                      <div class="components-scroll">
+                        ${this._installedAddons.map(addon => `
+                          <label class="checkbox-label" style="font-size: 12px;">
+                            <input type="checkbox" class="addon-checkbox" data-addon="${addon.slug}" ${this._modalSelectedAddons.includes(addon.slug) ? 'checked' : ''}>
+                            <span><b>${addon.name}</b> <span style="color: #64748b; font-size: 11px;">(${addon.version || addon.slug})</span></span>
+                          </label>
+                        `).join('')}
+                      </div>
+                    ` : `
+                      <div style="font-size: 12px; color: #64748b; font-style: italic; padding: 6px 0;">
+                        Aucun module complémentaire détecté ou environnement Home Assistant Container/Core.
+                      </div>
+                    `}
+                  </div>
+
+                  <!-- FOLDERS -->
+                  <div>
+                    <div style="font-size: 12px; font-weight: 600; color: #e2e8f0; margin-bottom: 6px;">
+                      📁 Dossiers partagés :
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+                      ${this._availableFolders.map(folder => `
+                        <label class="checkbox-label" style="font-size: 12px;">
+                          <input type="checkbox" class="folder-checkbox" data-folder="${folder}" ${this._modalSelectedFolders.includes(folder) ? 'checked' : ''}>
+                          <code>/${folder}</code>
+                        </label>
+                      `).join('')}
+                    </div>
+                  </div>
+                </div>
+              ` : `
+                <div style="margin-bottom: 8px;">
+                  <label class="checkbox-label">
+                    <input type="checkbox" id="modal-check-db" ${this._modalIncludeDb ? 'checked' : ''}>
+                    <span>Inclure la base de données (enregistreur & historique)</span>
+                  </label>
+                </div>
+              `}
             </div>
             <div class="modal-footer">
               <button class="btn btn-secondary" id="btn-cancel-backup">Annuler</button>
-              <button class="btn btn-primary" id="btn-confirm-backup">🚀 Lancer la sauvegarde</button>
+              <button class="btn btn-primary" id="btn-confirm-backup">
+                ${this._modalBackupType === 'partial' ? '🚀 Lancer la Sauvegarde Partielle' : '🚀 Lancer la Sauvegarde Complète'}
+              </button>
             </div>
           </div>
         </div>
@@ -1594,7 +1767,7 @@ class DomoLinkBackupPanel extends HTMLElement {
       <!-- MODAL POPIN: RESTAURATION / RAPATRIEMENT DISTANT -->
       ${this._showRestoreModal && this._restoreModalBackup ? `
         <div class="modal-overlay" id="modal-restore-overlay">
-          <div class="modal-card" style="max-width: 560px;">
+          <div class="modal-card" style="max-width: 600px;">
             <div class="modal-header">
               <h3 class="modal-title">🔄 Restauration & Rapatriement</h3>
               <button class="btn btn-secondary" id="btn-close-restore-modal" style="padding: 4px 10px; font-size: 12px;">✕</button>
@@ -1606,32 +1779,62 @@ class DomoLinkBackupPanel extends HTMLElement {
                 ${this._restoreModalBackup.size ? ` <span style="color: #64748b; font-size: 12px;">(${roundSize(this._restoreModalBackup.size)})</span>` : ''}
               </p>
 
-              <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px;">
-                <label style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: ${this._restoreMode === 'download_only' ? 'rgba(59, 130, 246, 0.12)' : 'rgba(255,255,255,0.03)'}; border: 1px solid ${this._restoreMode === 'download_only' ? '#3b82f6' : 'rgba(255,255,255,0.1)'}; border-radius: 8px; cursor: pointer; transition: all 0.2s;">
+              <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px;">
+                <!-- OPTION 1: DOWNLOAD ONLY -->
+                <div id="card-restore-download" style="display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; background: ${this._restoreMode === 'download_only' ? 'rgba(59, 130, 246, 0.12)' : 'rgba(255,255,255,0.03)'}; border: 1px solid ${this._restoreMode === 'download_only' ? '#3b82f6' : 'rgba(255,255,255,0.1)'}; border-radius: 8px; cursor: pointer; transition: all 0.2s;">
                   <input type="radio" name="restore_mode_radio" value="download_only" id="radio-mode-download" ${this._restoreMode === 'download_only' ? 'checked' : ''} style="margin-top: 3px; cursor: pointer;">
                   <div>
-                    <div style="font-weight: 700; color: #f8fafc; font-size: 14px;">📥 Rapatrier vers Home Assistant (Recommandé)</div>
-                    <div style="font-size: 12px; color: #94a3b8; margin-top: 4px; line-height: 1.4;">
-                      Télécharge l'archive distante vers <code>/config/backups</code> et l'enregistre immédiatement dans Home Assistant (Supervisor). Elle apparaîtra instantanément dans votre menu <em>Paramètres &gt; Système &gt; Sauvegardes</em> pour restauration ultérieure sans risque.
+                    <div style="font-weight: 700; color: #f8fafc; font-size: 13px;">📥 1. Rapatrier vers Home Assistant (Recommandé & Sans Risque)</div>
+                    <div style="font-size: 11px; color: #94a3b8; margin-top: 2px; line-height: 1.4;">
+                      Télécharge l'archive vers <code>/config/backups</code> et l'enregistre dans Home Assistant. Vous pourrez la restaurer à tout moment via <em>Paramètres &gt; Système &gt; Sauvegardes</em>.
                     </div>
                   </div>
-                </label>
+                </div>
 
-                <label style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: ${this._restoreMode === 'full_restore' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(255,255,255,0.03)'}; border: 1px solid ${this._restoreMode === 'full_restore' ? '#ef4444' : 'rgba(255,255,255,0.1)'}; border-radius: 8px; cursor: pointer; transition: all 0.2s;">
+                <!-- OPTION 2: FULL RESTORE -->
+                <div id="card-restore-full" style="display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; background: ${this._restoreMode === 'full_restore' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(255,255,255,0.03)'}; border: 1px solid ${this._restoreMode === 'full_restore' ? '#ef4444' : 'rgba(255,255,255,0.1)'}; border-radius: 8px; cursor: pointer; transition: all 0.2s;">
                   <input type="radio" name="restore_mode_radio" value="full_restore" id="radio-mode-full" ${this._restoreMode === 'full_restore' ? 'checked' : ''} style="margin-top: 3px; cursor: pointer;">
                   <div>
-                    <div style="font-weight: 700; color: #f87171; font-size: 14px;">⚡ Restauration Complète du système</div>
-                    <div style="font-size: 12px; color: #94a3b8; margin-top: 4px; line-height: 1.4;">
-                      Télécharge l'archive, l'enregistre dans Home Assistant, et lance immédiatement la restauration complète de l'ensemble de votre domotique. ⚠️ <em>Attention : Home Assistant redémarrera pendant l'opération.</em>
+                    <div style="font-weight: 700; color: #f87171; font-size: 13px;">⚡ 2. Restauration Complète Automatique</div>
+                    <div style="font-size: 11px; color: #94a3b8; margin-top: 2px; line-height: 1.4;">
+                      Télécharge l'archive et écrase l'ensemble du système avec son contenu (Core + tous les Add-ons + partages). ⚠️ <em>Home Assistant redémarrera pendant l'opération.</em>
                     </div>
                   </div>
-                </label>
+                </div>
+
+                <!-- OPTION 3: PARTIAL RESTORE -->
+                <div id="card-restore-partial" style="display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; background: ${this._restoreMode === 'partial_restore' ? 'rgba(245, 158, 11, 0.12)' : 'rgba(255,255,255,0.03)'}; border: 1px solid ${this._restoreMode === 'partial_restore' ? '#f59e0b' : 'rgba(255,255,255,0.1)'}; border-radius: 8px; cursor: pointer; transition: all 0.2s;">
+                  <input type="radio" name="restore_mode_radio" value="partial_restore" id="radio-mode-partial" ${this._restoreMode === 'partial_restore' ? 'checked' : ''} style="margin-top: 3px; cursor: pointer;">
+                  <div style="flex: 1;">
+                    <div style="font-weight: 700; color: #fbbf24; font-size: 13px;">🧩 3. Restauration Partielle / Ciblée</div>
+                    <div style="font-size: 11px; color: #94a3b8; margin-top: 2px; line-height: 1.4;">
+                      Restaure uniquement les composants sélectionnés ci-dessous depuis l'archive sans écraser le reste du système.
+                    </div>
+
+                    ${this._restoreMode === 'partial_restore' ? `
+                      <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.08); display: flex; flex-direction: column; gap: 8px;">
+                        <label class="checkbox-label" style="font-size: 12px;">
+                          <input type="checkbox" id="restore-check-ha" ${this._restoreIncludeHa ? 'checked' : ''}>
+                          <span>🏠 Configuration Home Assistant Core</span>
+                        </label>
+                        <label class="checkbox-label" style="font-size: 12px;">
+                          <input type="checkbox" id="restore-check-addons" ${this._restoreIncludeAddons ? 'checked' : ''}>
+                          <span>📦 Modules complémentaires (Add-ons)</span>
+                        </label>
+                        <label class="checkbox-label" style="font-size: 12px;">
+                          <input type="checkbox" id="restore-check-folders" ${this._restoreIncludeFolders ? 'checked' : ''}>
+                          <span>📁 Dossiers partagés (/share, /ssl, /media...)</span>
+                        </label>
+                      </div>
+                    ` : ''}
+                  </div>
+                </div>
               </div>
             </div>
             <div class="modal-footer">
               <button class="btn btn-secondary" id="btn-cancel-restore">Annuler</button>
-              <button class="btn btn-primary" id="btn-confirm-restore" style="${this._restoreMode === 'full_restore' ? 'background: #dc2626; border-color: #ef4444;' : ''}">
-                ${this._restoreMode === 'full_restore' ? '⚡ Lancer la Restauration Complète' : '📥 Rapatrier l\'archive'}
+              <button class="btn btn-primary" id="btn-confirm-restore" style="${this._restoreMode === 'full_restore' ? 'background: #dc2626; border-color: #ef4444;' : (this._restoreMode === 'partial_restore' ? 'background: #d97706; border-color: #f59e0b;' : '')}">
+                ${this._restoreMode === 'full_restore' ? '⚡ Lancer la Restauration Complète' : (this._restoreMode === 'partial_restore' ? '🧩 Lancer la Restauration Partielle' : '📥 Rapatrier l\'archive')}
               </button>
             </div>
           </div>
@@ -1781,10 +1984,53 @@ class DomoLinkBackupPanel extends HTMLElement {
     const btnCancelBackup = root.querySelector("#btn-cancel-backup");
     if (btnCancelBackup) btnCancelBackup.onclick = () => this._closeBackupModal();
 
+    const cardBackupFull = root.querySelector("#card-backup-full");
+    if (cardBackupFull) {
+      cardBackupFull.onclick = () => {
+        this._modalBackupType = "full";
+        this._modalBackupName = evaluateTemplate(this._template, "MANUEL");
+        this._render();
+      };
+    }
+
+    const cardBackupPartial = root.querySelector("#card-backup-partial");
+    if (cardBackupPartial) {
+      cardBackupPartial.onclick = () => {
+        this._modalBackupType = "partial";
+        this._modalBackupName = evaluateTemplate(this._template, "PARTIEL");
+        this._render();
+      };
+    }
+
+    const radioBtypeFull = root.querySelector("#radio-btype-full");
+    if (radioBtypeFull) {
+      radioBtypeFull.onchange = () => {
+        this._modalBackupType = "full";
+        this._modalBackupName = evaluateTemplate(this._template, "MANUEL");
+        this._render();
+      };
+    }
+
+    const radioBtypePartial = root.querySelector("#radio-btype-partial");
+    if (radioBtypePartial) {
+      radioBtypePartial.onchange = () => {
+        this._modalBackupType = "partial";
+        this._modalBackupName = evaluateTemplate(this._template, "PARTIEL");
+        this._render();
+      };
+    }
+
     const modalInput = root.querySelector("#modal-backup-input");
     if (modalInput) {
       modalInput.oninput = (e) => {
         this._modalBackupName = e.target.value;
+      };
+    }
+
+    const modalCheckHa = root.querySelector("#modal-check-ha");
+    if (modalCheckHa) {
+      modalCheckHa.onchange = (e) => {
+        this._modalIncludeHa = e.target.checked;
       };
     }
 
@@ -1794,6 +2040,42 @@ class DomoLinkBackupPanel extends HTMLElement {
         this._modalIncludeDb = e.target.checked;
       };
     }
+
+    const btnToggleAddons = root.querySelector("#btn-toggle-all-addons");
+    if (btnToggleAddons) {
+      btnToggleAddons.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (this._modalSelectedAddons.length === this._installedAddons.length) {
+          this._modalSelectedAddons = [];
+        } else {
+          this._modalSelectedAddons = this._installedAddons.map(a => a.slug);
+        }
+        this._render();
+      };
+    }
+
+    root.querySelectorAll(".addon-checkbox").forEach(cb => {
+      cb.onchange = (e) => {
+        const slug = e.target.getAttribute("data-addon");
+        if (e.target.checked) {
+          if (!this._modalSelectedAddons.includes(slug)) this._modalSelectedAddons.push(slug);
+        } else {
+          this._modalSelectedAddons = this._modalSelectedAddons.filter(s => s !== slug);
+        }
+      };
+    });
+
+    root.querySelectorAll(".folder-checkbox").forEach(cb => {
+      cb.onchange = (e) => {
+        const f = e.target.getAttribute("data-folder");
+        if (e.target.checked) {
+          if (!this._modalSelectedFolders.includes(f)) this._modalSelectedFolders.push(f);
+        } else {
+          this._modalSelectedFolders = this._modalSelectedFolders.filter(x => x !== f);
+        }
+      };
+    });
 
     const modalChipDate = root.querySelector("#modal-chip-date");
     if (modalChipDate) modalChipDate.onclick = () => insertVarInInput(modalInput, "$Date");
@@ -1814,6 +2096,36 @@ class DomoLinkBackupPanel extends HTMLElement {
     const btnCancelRestore = root.querySelector("#btn-cancel-restore");
     if (btnCancelRestore) btnCancelRestore.onclick = () => this._closeRestoreModal();
 
+    const cardRestoreDownload = root.querySelector("#card-restore-download");
+    if (cardRestoreDownload) {
+      cardRestoreDownload.onclick = (e) => {
+        if (e.target.tagName !== "INPUT") {
+          this._restoreMode = "download_only";
+          this._render();
+        }
+      };
+    }
+
+    const cardRestoreFull = root.querySelector("#card-restore-full");
+    if (cardRestoreFull) {
+      cardRestoreFull.onclick = (e) => {
+        if (e.target.tagName !== "INPUT") {
+          this._restoreMode = "full_restore";
+          this._render();
+        }
+      };
+    }
+
+    const cardRestorePartial = root.querySelector("#card-restore-partial");
+    if (cardRestorePartial) {
+      cardRestorePartial.onclick = (e) => {
+        if (e.target.tagName !== "INPUT") {
+          this._restoreMode = "partial_restore";
+          this._render();
+        }
+      };
+    }
+
     const radioModeDownload = root.querySelector("#radio-mode-download");
     if (radioModeDownload) {
       radioModeDownload.onchange = () => {
@@ -1827,6 +2139,35 @@ class DomoLinkBackupPanel extends HTMLElement {
       radioModeFull.onchange = () => {
         this._restoreMode = "full_restore";
         this._render();
+      };
+    }
+
+    const radioModePartial = root.querySelector("#radio-mode-partial");
+    if (radioModePartial) {
+      radioModePartial.onchange = () => {
+        this._restoreMode = "partial_restore";
+        this._render();
+      };
+    }
+
+    const restoreCheckHa = root.querySelector("#restore-check-ha");
+    if (restoreCheckHa) {
+      restoreCheckHa.onchange = (e) => {
+        this._restoreIncludeHa = e.target.checked;
+      };
+    }
+
+    const restoreCheckAddons = root.querySelector("#restore-check-addons");
+    if (restoreCheckAddons) {
+      restoreCheckAddons.onchange = (e) => {
+        this._restoreIncludeAddons = e.target.checked;
+      };
+    }
+
+    const restoreCheckFolders = root.querySelector("#restore-check-folders");
+    if (restoreCheckFolders) {
+      restoreCheckFolders.onchange = (e) => {
+        this._restoreIncludeFolders = e.target.checked;
       };
     }
 
