@@ -118,7 +118,7 @@ class DomoLinkBackupPanel extends HTMLElement {
     this._hass = null;
     this._data = {};
     this._config = {};
-    this._version = "1.4.4";
+    this._version = "1.4.5";
     this._activeTab = "dashboard";
     this._refreshTimer = null;
     this._showBackupModal = false;
@@ -472,11 +472,14 @@ class DomoLinkBackupPanel extends HTMLElement {
 
     const progress = d.progress || { active: false, percent: 0, step_title: "Prêt", logs: [] };
     const progressActive = progress.active || isBusy;
+    const progressPercent = Math.max(0, Math.min(100, progress.percent || 0));
+    const report = (this._showReport && (progress.report || d.last_report)) ? (progress.report || d.last_report) : null;
     const rawProgressLogs = progress.logs || [];
     const progressLogs = [];
     for (let i = 0; i < rawProgressLogs.length; i++) {
       const l = rawProgressLogs[i];
-      const isProgressLine = l.tag || (l.message && (
+      if (!l) continue;
+      const isProgressLine = l.tag || (l.message && typeof l.message === "string" && (
         l.message.startsWith("Téléversement :") ||
         l.message.startsWith("Téléchargement :") ||
         l.message.startsWith("Scrutation des archives")
