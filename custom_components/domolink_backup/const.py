@@ -6,7 +6,7 @@ import re
 DOMAIN = "domolink_backup"
 NAME = "DomoLink-BackUp"
 DEFAULT_NAME = "DomoLink-BackUp"
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 
 # Backup and Restore Types
 BACKUP_TYPE_FULL = "full"

@@ -95,7 +95,7 @@ class DomoLinkBackupPanel extends HTMLElement {
     this._hass = null;
     this._data = {};
     this._config = {};
-    this._version = "1.4.0";
+    this._version = "1.4.2";
     this._activeTab = "dashboard";
     this._refreshTimer = null;
     this._showBackupModal = false;
