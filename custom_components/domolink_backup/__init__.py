@@ -49,6 +49,7 @@ from .const import (
     CONF_FTP_USER,
     CONF_GOOGLE_DRIVE_FOLDER_ID,
     CONF_GOOGLE_DRIVE_WEBHOOK_URL,
+    CONF_LOCAL_BACKUP_PATH,
     CONF_LOCAL_SHARE_PATH,
     CONF_MAX_BACKUPS_COUNT,
     CONF_MAX_STORAGE_MB,
@@ -69,6 +70,7 @@ from .const import (
     DEFAULT_BACKUP_NAME_TEMPLATE,
     DEFAULT_FTP_PATH,
     DEFAULT_FTP_PORT,
+    DEFAULT_LOCAL_BACKUP_PATH,
     DEFAULT_LOCAL_SHARE_PATH,
     DEFAULT_MAX_BACKUPS_COUNT,
     DEFAULT_MAX_STORAGE_MB,
@@ -223,6 +225,154 @@ def _sync_find_recent_backup(candidate_dirs: list[str], max_age_seconds: int = 6
     return None
 
 
+SKIP_SCAN_DIR_NAMES = {
+    "proc", "sys", "dev", "run", "etc", "lib", "lib64", "bin", "sbin",
+    "lost+found", ".git", "node_modules", "__pycache__", ".venv", ".cache",
+    "tmp", "cache",
+}
+
+
+def _sync_scan_local_disk_for_backups(
+    hass_config_dir: str | None = None,
+    extra_roots: list[str] | None = None,
+    max_depth: int = 4,
+    timeout_sec: float = 12.0,
+) -> dict[str, Any]:
+    """Scan local filesystem to find directories containing Home Assistant backup archives."""
+    start = time.monotonic()
+    deadline = start + timeout_sec
+    scanned_count = 0
+    found_dirs: dict[str, dict[str, Any]] = {}
+
+    search_roots = [
+        "/backup",
+        "/backups",
+        "/mnt",
+        "/share",
+        "/media",
+        "/data",
+        "/root",
+        "/home",
+        "/var",
+    ]
+    if hass_config_dir:
+        search_roots.insert(2, hass_config_dir)
+        backups_sub = os.path.join(hass_config_dir, "backups")
+        if os.path.isdir(backups_sub):
+            search_roots.insert(0, backups_sub)
+    if extra_roots:
+        for er in extra_roots:
+            if er and er not in search_roots:
+                search_roots.insert(0, er)
+
+    # First pass: check explicit candidate directories directly (instant)
+    for direct in list(search_roots):
+        if not os.path.isdir(direct):
+            continue
+        scanned_count += 1
+        tar_files: list[str] = []
+        for ext in BACKUP_ARCHIVE_EXTENSIONS:
+            try:
+                tar_files.extend(glob.glob(os.path.join(direct, ext)))
+            except OSError:
+                pass
+
+        if tar_files:
+            valid_backups = []
+            for tf in tar_files:
+                try:
+                    st = os.stat(tf)
+                    valid_backups.append((tf, st.st_size, st.st_mtime))
+                except OSError:
+                    continue
+            if valid_backups:
+                valid_backups.sort(key=lambda x: x[2], reverse=True)
+                newest = valid_backups[0]
+                found_dirs[direct] = {
+                    "path": direct,
+                    "count": len(valid_backups),
+                    "latest_backup": os.path.basename(newest[0]),
+                    "latest_size_mb": round(newest[1] / (1024 * 1024), 2),
+                    "latest_mtime": newest[2],
+                    "latest_date": datetime.fromtimestamp(newest[2], tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                }
+
+    # Second pass: recursive search on roots
+    for root in search_roots:
+        if time.monotonic() > deadline:
+            break
+        if not os.path.isdir(root):
+            continue
+        base_depth = root.rstrip(os.sep).count(os.sep)
+
+        for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
+            if time.monotonic() > deadline:
+                break
+            scanned_count += 1
+            cur_depth = dirpath.count(os.sep) - base_depth
+            if cur_depth >= max_depth:
+                dirnames.clear()
+                continue
+
+            dirnames[:] = [
+                d for d in dirnames
+                if d.lower() not in SKIP_SCAN_DIR_NAMES and not d.startswith(".")
+            ]
+
+            tar_files = [
+                os.path.join(dirpath, f) for f in filenames
+                if f.lower().endswith((".tar", ".tar.gz", ".tgz"))
+            ]
+            if not tar_files or dirpath in found_dirs:
+                continue
+
+            valid_backups = []
+            for tf in tar_files:
+                try:
+                    st = os.stat(tf)
+                    valid_backups.append((tf, st.st_size, st.st_mtime))
+                except OSError:
+                    continue
+            if valid_backups:
+                valid_backups.sort(key=lambda x: x[2], reverse=True)
+                newest = valid_backups[0]
+                found_dirs[dirpath] = {
+                    "path": dirpath,
+                    "count": len(valid_backups),
+                    "latest_backup": os.path.basename(newest[0]),
+                    "latest_size_mb": round(newest[1] / (1024 * 1024), 2),
+                    "latest_mtime": newest[2],
+                    "latest_date": datetime.fromtimestamp(newest[2], tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                }
+
+    results = sorted(found_dirs.values(), key=lambda x: x["latest_mtime"], reverse=True)
+    elapsed = round(time.monotonic() - start, 2)
+    return {
+        "results": results,
+        "scanned_count": scanned_count,
+        "elapsed_sec": elapsed,
+    }
+
+
+def _sync_find_any_newest_backup_on_disk(
+    hass_config_dir: str | None = None,
+    max_age_seconds: int = 900,
+) -> tuple[str, str, int] | None:
+    """Fast search for any newly created backup archive on the system within max_age_seconds."""
+    scan_res = _sync_scan_local_disk_for_backups(hass_config_dir=hass_config_dir, timeout_sec=8.0)
+    now = time.time()
+    for d in scan_res.get("results", []):
+        mtime = d.get("latest_mtime", 0)
+        if (now - mtime) <= max_age_seconds:
+            full_p = os.path.join(d["path"], d["latest_backup"])
+            try:
+                sz = os.path.getsize(full_p)
+                return d["path"], full_p, sz
+            except OSError:
+                continue
+    return None
+
+
 class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinator managing DomoLink-BackUp state, tasks and synchronization."""
 
@@ -271,6 +421,10 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.entry.data.get(CONF_BACKUP_NAME_TEMPLATE, DEFAULT_BACKUP_NAME_TEMPLATE)
             ),
             "resolved_template_name": "",
+            "local_backup_path": self.entry.options.get(
+                CONF_LOCAL_BACKUP_PATH,
+                self.entry.data.get(CONF_LOCAL_BACKUP_PATH, DEFAULT_LOCAL_BACKUP_PATH)
+            ),
             "last_report": None,
             "progress": {
                 "active": False,
@@ -306,6 +460,11 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.data["backup_name_template"] = template
         preview_title, _ = resolve_backup_name_template(template, mode="MANUEL")
         self.data["resolved_template_name"] = preview_title
+        local_path = self.entry.options.get(
+            CONF_LOCAL_BACKUP_PATH,
+            self.entry.data.get(CONF_LOCAL_BACKUP_PATH, self.data.get("local_backup_path", DEFAULT_LOCAL_BACKUP_PATH))
+        )
+        self.data["local_backup_path"] = local_path
 
         self.async_set_updated_data(self.data)
 
@@ -323,6 +482,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "connection_message": self.data.get("connection_message"),
             "connection_last_checked": self.data.get("connection_last_checked"),
             "last_report": self.data.get("last_report"),
+            "local_backup_path": self.data.get("local_backup_path"),
         }
         await self.store.async_save(to_save)
 
@@ -389,7 +549,18 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def _get_candidate_backup_dirs(self) -> list[str]:
         """Return all potential backup directories across all HA installation types."""
-        candidates = [
+        candidates: list[str] = []
+
+        # 1. User configured local backup directory has highest priority
+        configured_path = self.entry.options.get(
+            CONF_LOCAL_BACKUP_PATH,
+            self.entry.data.get(CONF_LOCAL_BACKUP_PATH, self.data.get("local_backup_path", ""))
+        )
+        if configured_path and os.path.isdir(configured_path):
+            candidates.append(configured_path)
+
+        # 2. Standard directories
+        standard_candidates = [
             "/backup",
             "/backups",
             self.hass.config.path("backups"),
@@ -400,15 +571,34 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "/media/backups",
             "/mnt/data/supervisor/backup",
             "/mnt/data/backup",
+            "/data/backup",
+            "/data/backups",
         ]
+        candidates.extend(standard_candidates)
+
+        # 3. Mount points exploration (/mnt, /media, /share)
+        for mount_root in ("/mnt", "/media", "/share"):
+            try:
+                if os.path.isdir(mount_root):
+                    for entry in os.scandir(mount_root):
+                        if entry.is_dir():
+                            candidates.append(entry.path)
+                            for sub in ("backup", "backups"):
+                                sub_p = os.path.join(entry.path, sub)
+                                if os.path.isdir(sub_p):
+                                    candidates.append(sub_p)
+            except Exception:
+                pass
+
         try:
             from homeassistant.components.backup.const import DATA_MANAGER
             manager = self.hass.data.get(DATA_MANAGER) or self.hass.data.get("backup")
             if manager and hasattr(manager, "backup_agents"):
                 for agent in manager.backup_agents.values():
-                    b_dir = getattr(agent, "_backup_dir", None)
-                    if b_dir:
-                        candidates.append(str(b_dir))
+                    for attr in ("_backup_dir", "backup_dir", "_backup_path", "path"):
+                        b_dir = getattr(agent, attr, None)
+                        if b_dir:
+                            candidates.append(str(b_dir))
         except Exception:
             pass
 
@@ -677,6 +867,35 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         log_msg=f"Écriture locale en cours : {cand_name} ({size_mb} Mo)...",
                     )
                 else:
+                    # Active periodic disk scan if candidate dirs haven't yielded anything yet
+                    if poll_count >= 5 and poll_count % 3 == 0:
+                        disk_found = await self.hass.async_add_executor_job(
+                            _sync_find_any_newest_backup_on_disk,
+                            self.hass.config.config_dir,
+                            900,
+                        )
+                        if disk_found:
+                            found_dir, found_tar, found_sz = disk_found
+                            if found_dir not in existing_dirs:
+                                existing_dirs.insert(0, found_dir)
+                                self.data["local_backup_path"] = found_dir
+                                self.update_progress(
+                                    STAGE_CREATING_LOCAL,
+                                    42,
+                                    "Dossier local identifié",
+                                    f"Archive trouvée dans {found_dir}",
+                                    log_msg=f"🔍 Scan du disque : archive trouvée dans '{found_dir}' ({os.path.basename(found_tar)})",
+                                )
+                                try:
+                                    opts = dict(self.entry.options)
+                                    opts[CONF_LOCAL_BACKUP_PATH] = found_dir
+                                    self.hass.config_entries.async_update_entry(self.entry, options=opts)
+                                except Exception:
+                                    pass
+                            new_file = found_tar
+                            file_size = found_sz
+                            break
+
                     if poll_count % 4 == 0:
                         self.update_progress(
                             STAGE_CREATING_LOCAL,
@@ -693,12 +912,30 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     raise exc
 
             if not new_file:
-                # Fallback: check recent archives modified in last 10 minutes
+                # Fallback 1: check recent archives in candidate dirs
                 new_file = await self.hass.async_add_executor_job(
                     _sync_find_recent_backup, existing_dirs, 600
                 )
                 if new_file:
                     file_size = await self.hass.async_add_executor_job(os.path.getsize, new_file)
+
+            if not new_file:
+                # Fallback 2: deep disk search across entire system for newest backup
+                disk_found = await self.hass.async_add_executor_job(
+                    _sync_find_any_newest_backup_on_disk,
+                    self.hass.config.config_dir,
+                    900,
+                )
+                if disk_found:
+                    found_dir, new_file, file_size = disk_found
+                    self.data["local_backup_path"] = found_dir
+                    self.update_progress(
+                        STAGE_CREATING_LOCAL,
+                        44,
+                        "Archive localisée par scan",
+                        f"{new_file}",
+                        log_msg=f"✓ Archive localisée par scan système : {new_file}",
+                    )
 
             if not new_file:
                 raise FileNotFoundError(
@@ -1248,11 +1485,67 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         success = await coordinator.async_delete_backup(backup_id)
         connection.send_result(msg["id"], {"success": success})
 
+    @websocket_command({
+        vol.Required("type"): "domolink_backup/scan_local_backup_paths",
+        vol.Optional("extra_roots"): [str],
+    })
+    @async_response
+    async def ws_scan_local_backup_paths(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
+        coordinator = _get_active_coordinator(hass)
+        if not coordinator:
+            connection.send_error(msg["id"], "not_found", "Coordinateur non disponible")
+            return
+        extra_roots = msg.get("extra_roots")
+        scan_res = await hass.async_add_executor_job(
+            _sync_scan_local_disk_for_backups,
+            hass.config.config_dir,
+            extra_roots,
+        )
+        current_path = coordinator.data.get("local_backup_path", "")
+        for item in scan_res.get("results", []):
+            item["is_current"] = (item["path"] == current_path)
+        connection.send_result(
+            msg["id"],
+            {
+                "success": True,
+                "results": scan_res.get("results", []),
+                "scanned_count": scan_res.get("scanned_count", 0),
+                "elapsed_sec": scan_res.get("elapsed_sec", 0.0),
+                "current_path": current_path,
+            },
+        )
+
+    @websocket_command({
+        vol.Required("type"): "domolink_backup/set_local_backup_path",
+        vol.Required("path"): str,
+    })
+    @callback
+    def ws_set_local_backup_path(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
+        coordinator = _get_active_coordinator(hass)
+        if not coordinator:
+            connection.send_error(msg["id"], "not_found", "Coordinateur non disponible")
+            return
+        chosen_path = msg["path"].strip()
+        options = dict(coordinator.entry.options or coordinator.entry.data)
+        options[CONF_LOCAL_BACKUP_PATH] = chosen_path
+        hass.config_entries.async_update_entry(coordinator.entry, options=options)
+        coordinator.data["local_backup_path"] = chosen_path
+        coordinator.async_set_updated_data(coordinator.data)
+        connection.send_result(
+            msg["id"],
+            {
+                "success": True,
+                "path": chosen_path,
+            },
+        )
+
     try:
         async_register_command(hass, ws_get_data)
         async_register_command(hass, ws_trigger_backup)
         async_register_command(hass, ws_save_template)
         async_register_command(hass, ws_get_template_preview)
+        async_register_command(hass, ws_scan_local_backup_paths)
+        async_register_command(hass, ws_set_local_backup_path)
         async_register_command(hass, ws_test_connection)
         async_register_command(hass, ws_clean_backups)
         async_register_command(hass, ws_delete_backup)

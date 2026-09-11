@@ -25,6 +25,7 @@ from .const import (
     CONF_FTP_USER,
     CONF_GOOGLE_DRIVE_FOLDER_ID,
     CONF_GOOGLE_DRIVE_WEBHOOK_URL,
+    CONF_LOCAL_BACKUP_PATH,
     CONF_LOCAL_SHARE_PATH,
     CONF_MAX_BACKUPS_COUNT,
     CONF_MAX_STORAGE_MB,
@@ -46,6 +47,7 @@ from .const import (
     DEFAULT_BACKUP_NAME_TEMPLATE,
     DEFAULT_FTP_PATH,
     DEFAULT_FTP_PORT,
+    DEFAULT_LOCAL_BACKUP_PATH,
     DEFAULT_LOCAL_SHARE_PATH,
     DEFAULT_MAX_BACKUPS_COUNT,
     DEFAULT_MAX_STORAGE_MB,
@@ -208,6 +210,7 @@ class DomoLinkBackupConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_MAX_STORAGE_MB, default=DEFAULT_MAX_STORAGE_MB): int,
                 vol.Optional(CONF_AUTO_CLEAN_ENABLED, default=True): bool,
                 vol.Optional(CONF_BACKUP_NAME_TEMPLATE, default=DEFAULT_BACKUP_NAME_TEMPLATE): str,
+                vol.Optional(CONF_LOCAL_BACKUP_PATH, default=DEFAULT_LOCAL_BACKUP_PATH): str,
             }
         )
 
@@ -367,6 +370,7 @@ class DomoLinkBackupOptionsFlow(config_entries.OptionsFlow):
                 vol.Required(CONF_MAX_STORAGE_MB, default=int(self.options.get(CONF_MAX_STORAGE_MB, DEFAULT_MAX_STORAGE_MB))): int,
                 vol.Optional(CONF_AUTO_CLEAN_ENABLED, default=bool(self.options.get(CONF_AUTO_CLEAN_ENABLED, True))): bool,
                 vol.Optional(CONF_BACKUP_NAME_TEMPLATE, default=str(self.options.get(CONF_BACKUP_NAME_TEMPLATE, DEFAULT_BACKUP_NAME_TEMPLATE))): str,
+                vol.Optional(CONF_LOCAL_BACKUP_PATH, default=str(self.options.get(CONF_LOCAL_BACKUP_PATH, DEFAULT_LOCAL_BACKUP_PATH))): str,
             }
         )
 

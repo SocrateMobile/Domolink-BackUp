@@ -1,7 +1,7 @@
 # 💾 DomoLink-BackUp pour Home Assistant
 
 [![HACS Compatible](https://img.shields.io/badge/HACS-Custom-blue.svg)](https://github.com/SocrateMobile/Domolink-BackUp)
-[![Version](https://img.shields.io/badge/version-1.2.0-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
+[![Version](https://img.shields.io/badge/version-1.2.1-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 
 Dans la lignée directe de **DomoLink-Alarm** et **DomoLink-Mistral IA**, **DomoLink-BackUp** est une intégration Home Assistant puissante et clé en main dédiée au **stockage distant, automatique et sécurisé des sauvegardes de votre domotique**.
@@ -10,7 +10,14 @@ Elle reprend l'ergonomie, la mécanique et le paramétrage éprouvés de la suit
 
 ---
 
-## 🚀 Nouveautés Majeures de la Version 1.2.0
+## 🚀 Nouveautés Majeures de la Version 1.2.1
+
+- **🔍 Fonction « Scan du disque local » & Sélection du chemin de sauvegarde** :
+  - Outil de diagnostic et de découverte analysant le disque local (`/backup`, `/mnt`, `/share`, `/media`, `/data`, etc.) pour localiser avec précision où Home Assistant stocke ses archives `.tar`.
+  - Bouton interactif **« 🔍 Scanner le disque pour trouver le chemin »** dans l'onglet *⚙️ Profil & Modèle* du tableau de bord.
+  - Tableau des répertoires détectés avec le nombre d'archives, les détails de la sauvegarde la plus récente (nom, taille en Mo, date) et application du dossier en 1 clic.
+  - Paramètre configurable `local_backup_path` dans les options de l'intégration.
+  - **Auto-détection et auto-guérison en cours de sauvegarde** : Si l'archive générée ne se trouve pas dans les répertoires par défaut, un scan d'arrière-plan localise automatiquement la nouvelle archive en quelques secondes, mémorise son chemin et poursuit le téléversement sans attente inutile.
 
 - **📝 Modèle de nommage dynamique personnalisable** :
   - Support des variables dynamiques : `$Date` (ex: `01/02/2026`), `$Heure` (ex: `20H28`), `$Mode` (`MANUEL` ou `AUTO`).

@@ -6,7 +6,7 @@ import re
 DOMAIN = "domolink_backup"
 NAME = "DomoLink-BackUp"
 DEFAULT_NAME = "DomoLink-BackUp"
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 
 # Storage key for persistent state
 STORAGE_KEY = "domolink_backup_data"
@@ -158,12 +158,14 @@ CONF_MAX_BACKUPS_COUNT = "max_backups_count"
 CONF_MAX_STORAGE_MB = "max_storage_mb"
 CONF_AUTO_CLEAN_ENABLED = "auto_clean_enabled"
 CONF_BACKUP_NAME_TEMPLATE = "backup_name_template"
+CONF_LOCAL_BACKUP_PATH = "local_backup_path"
 
 DEFAULT_RETENTION_DAYS = 30
 DEFAULT_MAX_BACKUPS_COUNT = 7
 DEFAULT_MAX_STORAGE_MB = 10240  # 10 GB
 DEFAULT_AUTO_CLEAN_ENABLED = True
 DEFAULT_BACKUP_NAME_TEMPLATE = "$Date $Heure BackUp Home Assistant $Mode"
+DEFAULT_LOCAL_BACKUP_PATH = ""
 
 # Configuration Keys - Telegram Notifications
 CONF_TELEGRAM_ENABLED = "telegram_enabled"
