@@ -1,7 +1,7 @@
 /**
  * DomoLink-BackUp Frontend Dashboard Panel
  * Sidebar Title: DomoLink-BackUp
- * Version: 1.2.0
+ * Version: 1.2.1
  * Style: Modern DomoLink Glassmorphism Dark UI
  */
 
@@ -95,16 +95,20 @@ class DomoLinkBackupPanel extends HTMLElement {
     this._hass = null;
     this._data = {};
     this._config = {};
-    this._version = "1.2.0";
+    this._version = "1.2.1";
     this._activeTab = "dashboard";
     this._refreshTimer = null;
-    this._pollingInterval = 8000;
     this._showBackupModal = false;
     this._showReport = true;
     this._modalBackupName = "";
     this._modalIncludeDb = true;
     this._templateInputVal = "";
     this._templateSavedNotice = "";
+    this._localPathInputVal = "";
+    this._localPathSavedNotice = "";
+    this._isScanningLocal = false;
+    this._scanResults = null;
+    this._scanMeta = null;
   }
 
   set hass(hass) {
@@ -150,6 +154,10 @@ class DomoLinkBackupPanel extends HTMLElement {
 
         if (!this._templateInputVal) {
           this._templateInputVal = this._data.backup_name_template || this._config.backup_name_template || DEFAULT_TEMPLATE;
+        }
+
+        if (!this._localPathInputVal && this._data.local_backup_path) {
+          this._localPathInputVal = this._data.local_backup_path;
         }
 
         this._render();
@@ -217,6 +225,53 @@ class DomoLinkBackupPanel extends HTMLElement {
       }, 3500);
     } catch (err) {
       alert("Erreur lors de l'enregistrement du modèle : " + (err.message || err));
+    }
+  }
+
+  async _scanLocalBackupPaths() {
+    if (!this._hass) return;
+    this._isScanningLocal = true;
+    this._scanResults = null;
+    this._scanMeta = null;
+    this._render();
+
+    try {
+      const res = await this._hass.callWS({ type: "domolink_backup/scan_local_backup_paths" });
+      if (res && res.success) {
+        this._scanResults = res.results || [];
+        this._scanMeta = {
+          scanned_count: res.scanned_count || 0,
+          elapsed_sec: res.elapsed_sec || 0,
+        };
+      } else {
+        alert("Le scan n'a pas retourné de résultats.");
+      }
+    } catch (err) {
+      alert("Erreur lors du scan du disque local : " + (err.message || err));
+    } finally {
+      this._isScanningLocal = false;
+      this._render();
+    }
+  }
+
+  async _setLocalBackupPath(path) {
+    if (!this._hass) return;
+    const chosen = (path !== undefined ? path : this._localPathInputVal).trim();
+    try {
+      await this._hass.callWS({
+        type: "domolink_backup/set_local_backup_path",
+        path: chosen,
+      });
+      this._data.local_backup_path = chosen;
+      this._localPathInputVal = chosen;
+      this._localPathSavedNotice = chosen ? `✓ Dossier configuré : ${chosen}` : "✓ Auto-détection réactivée !";
+      this._render();
+      setTimeout(() => {
+        this._localPathSavedNotice = "";
+        this._render();
+      }, 4000);
+    } catch (err) {
+      alert("Erreur lors de l'enregistrement du chemin local : " + (err.message || err));
     }
   }
 
@@ -298,6 +353,8 @@ class DomoLinkBackupPanel extends HTMLElement {
 
     const currentTpl = this._templateInputVal || d.backup_name_template || cfg.backup_name_template || DEFAULT_TEMPLATE;
     const tplPreview = evaluateTemplate(currentTpl, "MANUEL");
+
+    const configuredLocalPath = this._localPathInputVal || d.local_backup_path || cfg.local_backup_path || "";
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -864,6 +921,55 @@ class DomoLinkBackupPanel extends HTMLElement {
           user-select: none;
         }
 
+        /* Scan Results Table / Box */
+        .scan-results-box {
+          margin-top: 16px;
+          background: rgba(0, 0, 0, 0.3);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 10px;
+          overflow: hidden;
+        }
+
+        .scan-item {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 12px 16px;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+          gap: 12px;
+        }
+
+        .scan-item:last-child {
+          border-bottom: none;
+        }
+
+        .scan-path {
+          font-family: monospace;
+          font-size: 13px;
+          color: #38bdf8;
+          word-break: break-all;
+        }
+
+        .scan-details {
+          font-size: 12px;
+          color: #94a3b8;
+          margin-top: 4px;
+        }
+
+        .spinner {
+          display: inline-block;
+          width: 14px;
+          height: 14px;
+          border: 2px solid rgba(255,255,255,0.3);
+          border-radius: 50%;
+          border-top-color: #fff;
+          animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+
         /* Table */
         table {
           width: 100%;
@@ -1178,8 +1284,88 @@ class DomoLinkBackupPanel extends HTMLElement {
           </div>
         ` : ''}
 
-        <!-- TAB 3: CONFIGURATION & PROFILES & TEMPLATE -->
+        <!-- TAB 3: CONFIGURATION, SCAN LOCAL DISK & TEMPLATE -->
         ${this._activeTab === 'config' ? `
+          <!-- SCAN LOCAL DISK & BACKUP DIRECTORY CARD -->
+          <div class="card">
+            <div class="card-header">
+              <h2 class="card-title">🔍 Emplacement local des sauvegardes Home Assistant</h2>
+              ${this._localPathSavedNotice ? `
+                <span style="color: #34d399; font-weight: 600; font-size: 13px;">${this._localPathSavedNotice}</span>
+              ` : ''}
+            </div>
+            <p style="font-size: 13px; color: #94a3b8; margin-bottom: 14px;">
+              DomoLink-BackUp recherche les archives <code>.tar</code> créées par Home Assistant pour les téléverser sur votre serveur distant. 
+              Si vos sauvegardes se situent sur une partition spécifique (ex: partition Supervisor, montage externe <code>/mnt</code>, montage réseau ou clé USB), 
+              vous pouvez renseigner le dossier exact ou lancer un <b>scan automatique de la machine</b>.
+            </p>
+
+            <div class="form-group">
+              <label class="form-label" for="input-local-path">Dossier local de sauvegarde :</label>
+              <div style="display: flex; gap: 10px; align-items: center;">
+                <input type="text" id="input-local-path" class="text-input" value="${configuredLocalPath}" placeholder="ex: /backup ou /mnt/data/supervisor/backup (vide = auto)">
+                <button class="btn btn-primary" id="btn-save-local-path" style="white-space: nowrap;">
+                  💾 Enregistrer
+                </button>
+              </div>
+              <div style="font-size: 12px; color: #64748b; margin-top: 6px;">
+                État actuel : ${configuredLocalPath ? `<b style="color: #38bdf8;">Dossier personnalisé (${configuredLocalPath})</b>` : `<span style="color: #34d399;">✓ Auto-détection active (/backup, /mnt, /share, ...)</span>`}
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px;">
+              <button class="btn btn-secondary" id="btn-scan-local" ${this._isScanningLocal ? 'disabled' : ''}>
+                ${this._isScanningLocal ? '<span class="spinner"></span> Analyse en cours...' : '🔍 Scanner le disque pour trouver le chemin'}
+              </button>
+              <button class="btn btn-secondary" id="btn-clear-local-path">
+                ↺ Rétablir l'auto-détection
+              </button>
+            </div>
+
+            <!-- SCAN RESULTS LIST -->
+            ${this._isScanningLocal ? `
+              <div style="margin-top: 16px; padding: 16px; background: rgba(0,0,0,0.3); border-radius: 10px; border: 1px dashed rgba(59,130,246,0.4); text-align: center;">
+                <div class="spinner" style="margin-bottom: 8px;"></div>
+                <div style="font-size: 13px; color: #60a5fa; font-weight: 600;">Balayage du disque en cours...</div>
+                <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Recherche des archives .tar dans /backup, /mnt, /share, /media, /data, /root...</div>
+              </div>
+            ` : ''}
+
+            ${this._scanResults ? `
+              <div class="scan-results-box">
+                <div style="padding: 12px 16px; background: rgba(255,255,255,0.04); font-size: 12px; font-weight: 600; color: #cbd5e1; display: flex; justify-content: space-between;">
+                  <span>Dossiers trouvés (${this._scanResults.length})</span>
+                  <span style="color: #64748b;">${this._scanMeta ? `${this._scanMeta.scanned_count} répertoires analysés en ${this._scanMeta.elapsed_sec}s` : ''}</span>
+                </div>
+                ${this._scanResults.length === 0 ? `
+                  <div style="padding: 20px; text-align: center; color: #fbbf24; font-size: 13px;">
+                    ⚠️ Aucune archive de sauvegarde .tar trouvée lors du balayage des répertoires standards.
+                  </div>
+                ` : this._scanResults.map(r => `
+                  <div class="scan-item">
+                    <div style="flex: 1;">
+                      <div class="scan-path">${r.path}</div>
+                      <div class="scan-details">
+                        <b>${r.count} archive(s)</b> • Dernière archive : <code>${r.latest_backup}</code> (${r.latest_size_mb} Mo, le ${r.latest_date})
+                      </div>
+                    </div>
+                    <div>
+                      ${r.path === configuredLocalPath ? `
+                        <span style="display: inline-block; padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 700; background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.4);">
+                          ✓ Actif
+                        </span>
+                      ` : `
+                        <button class="btn btn-primary btn-apply-scan-path" data-path="${r.path}" style="padding: 6px 12px; font-size: 12px;">
+                          ✓ Utiliser ce dossier
+                        </button>
+                      `}
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            ` : ''}
+          </div>
+
           <!-- TEMPLATE CONFIGURATION CARD -->
           <div class="card">
             <div class="card-header">
@@ -1379,6 +1565,42 @@ class DomoLinkBackupPanel extends HTMLElement {
         this._render();
       };
     }
+
+    // Local backup path buttons & input
+    const inputLocalPath = root.querySelector("#input-local-path");
+    if (inputLocalPath) {
+      inputLocalPath.oninput = (e) => {
+        this._localPathInputVal = e.target.value;
+      };
+    }
+
+    const btnSaveLocalPath = root.querySelector("#btn-save-local-path");
+    if (btnSaveLocalPath) {
+      btnSaveLocalPath.onclick = () => {
+        const val = inputLocalPath ? inputLocalPath.value : this._localPathInputVal;
+        this._setLocalBackupPath(val);
+      };
+    }
+
+    const btnClearLocalPath = root.querySelector("#btn-clear-local-path");
+    if (btnClearLocalPath) {
+      btnClearLocalPath.onclick = () => {
+        this._setLocalBackupPath("");
+      };
+    }
+
+    const btnScanLocal = root.querySelector("#btn-scan-local");
+    if (btnScanLocal) {
+      btnScanLocal.onclick = () => this._scanLocalBackupPaths();
+    }
+
+    // Buttons to apply a discovered path from scan results
+    root.querySelectorAll(".btn-apply-scan-path").forEach(btn => {
+      btn.onclick = (e) => {
+        const path = e.target.getAttribute("data-path");
+        if (path) this._setLocalBackupPath(path);
+      };
+    });
 
     // Template input and chips (Config tab)
     const tplInput = root.querySelector("#input-template");
