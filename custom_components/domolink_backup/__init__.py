@@ -1362,7 +1362,13 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if file_size == 0:
                 file_size = await self.hass.async_add_executor_job(os.path.getsize, tar_path)
 
-            filename = os.path.basename(tar_path)
+            local_filename = os.path.basename(tar_path)
+            # Remote filename: resolve from user's template (safe_slug) or fallback to local tar name
+            remote_filename = f"{safe_slug}.tar" if safe_slug else local_filename
+            if not remote_filename.endswith(".tar"):
+                remote_filename += ".tar"
+
+            filename = remote_filename
             size_mb = round(file_size / (1024 * 1024), 2)
 
             # 5. Verification step
@@ -1370,19 +1376,19 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 STAGE_VERIFYING,
                 48,
                 "Vérification de l'archive",
-                f"Archive {filename} validée ({size_mb} Mo)",
-                log_msg=f"✓ Archive locale prête : {tar_path} ({size_mb} Mo)",
+                f"Archive {local_filename} validée ({size_mb} Mo)",
+                log_msg=f"✓ Archive locale prête : {tar_path} ({size_mb} Mo) • Cible distante : {remote_filename}",
             )
 
             # 6. Remote upload step
-            self.set_status(STATE_UPLOADING, f"Téléversement de {filename} vers {dest_label}...", is_busy=True)
+            self.set_status(STATE_UPLOADING, f"Téléversement de {remote_filename} vers {dest_label}...", is_busy=True)
             self.update_progress(
                 STAGE_UPLOADING,
                 50,
                 "Téléversement distant",
-                f"Envoi de {filename} vers {dest_label} ({size_mb} Mo)...",
-                log_msg=f"Début du transfert vers {dest_label} ({size_mb} Mo)...",
-                current_file=filename,
+                f"Envoi de {remote_filename} vers {dest_label} ({size_mb} Mo)...",
+                log_msg=f"Début du transfert vers {dest_label} : {remote_filename} ({size_mb} Mo)...",
+                current_file=remote_filename,
                 total_bytes=file_size,
             )
 
@@ -1406,7 +1412,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     pct,
                     "Téléversement distant",
                     f"{sent_mb} Mo / {size_mb} Mo ({pct}%) • {speed_mb_sec} Mo/s",
-                    current_file=filename,
+                    current_file=remote_filename,
                     transferred_bytes=bytes_sent,
                     total_bytes=file_size,
                     speed_kbps=round(speed_bytes_sec / 1024, 1),
@@ -1425,7 +1431,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             upload_success = await self.storage_engine.async_upload(
                 source=tar_path,
-                filename=filename,
+                filename=remote_filename,
                 size=file_size,
                 on_progress=_on_upload_progress,
             )
@@ -1446,7 +1452,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     log_msg="Téléversement terminé avec succès. Finalisation...",
                 )
 
-                self.data["last_backup_name"] = filename
+                self.data["last_backup_name"] = remote_filename
                 self.data["last_backup_date"] = datetime.now(timezone.utc).isoformat()
                 self.data["last_backup_size_mb"] = size_mb
                 self.data["last_upload_duration_sec"] = round(elapsed, 1)
@@ -1457,7 +1463,8 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # Build full completion report
                 report = {
                     "backup_name": backup_title,
-                    "filename": filename,
+                    "filename": remote_filename,
+                    "local_filename": local_filename,
                     "source_path": tar_path,
                     "destination": dest_label,
                     "size_bytes": file_size,
