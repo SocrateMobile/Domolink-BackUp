@@ -37,7 +37,8 @@
           "max_backups_count": "Nombre maximum de sauvegardes à conserver",
           "retention_days": "Rétention maximale en jours",
           "max_storage_mb": "Espace de stockage maximal alloué (en Mo)",
-          "auto_clean_enabled": "Activer le nettoyage automatique (purge FIFO)"
+          "auto_clean_enabled": "Activer le nettoyage automatique (purge FIFO)",
+          "backup_name_template": "Modèle de nom de sauvegarde ($Date=01/02/2026, $Heure=20H28, $Mode=MANUEL/AUTO)"
         }
       },
       "telegram": {
@@ -96,7 +97,8 @@
           "max_backups_count": "Nombre maximum de sauvegardes",
           "retention_days": "Rétention maximale (jours)",
           "max_storage_mb": "Espace maximal (Mo)",
-          "auto_clean_enabled": "Nettoyage automatique"
+          "auto_clean_enabled": "Nettoyage automatique",
+          "backup_name_template": "Modèle de nom de sauvegarde ($Date=01/02/2026, $Heure=20H28, $Mode=MANUEL/AUTO)"
         }
       },
       "telegram": {
