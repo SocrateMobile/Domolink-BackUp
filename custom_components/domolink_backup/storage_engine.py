@@ -916,18 +916,69 @@ class DomoLinkStorageEngine:
                         _ftp_ensure_dir(ftp, path)
 
                 if not listed:
+                    # Pass 2: Try standard LIST command (supported by 100% of FTP servers including Freebox)
+                    lines: list[str] = []
+                    try:
+                        ftp.retrlines("LIST", lines.append)
+                    except Exception as list_err:
+                        _LOGGER.debug("DomoLink-BackUp: retrlines('LIST') échoué: %s", list_err)
+
+                    for line in lines:
+                        line = line.strip()
+                        if not line or line.lower().startswith("total "):
+                            continue
+                        # Standard Unix ls -l format:
+                        # -rw-r--r-- 1 ftp ftp 1713438720 Sep 11 11:03 4c21b37b.tar
+                        parts = line.split(maxsplit=8)
+                        if len(parts) >= 9 and not parts[0].startswith("d"):
+                            fname = parts[8].strip()
+                            clean_name = os.path.basename(fname)
+                            if clean_name.endswith((".tar", ".tar.gz", ".zip")):
+                                file_size = 0
+                                try:
+                                    file_size = int(parts[4])
+                                except (ValueError, TypeError):
+                                    pass
+
+                                file_date = datetime.now(timezone.utc).isoformat()
+                                try:
+                                    mdtm_resp = ftp.sendcmd(f"MDTM {clean_name}")
+                                    if mdtm_resp.startswith("213 ") and len(mdtm_resp.strip()) >= 18:
+                                        dt = datetime.strptime(mdtm_resp[4:].strip(), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+                                        file_date = dt.isoformat()
+                                except Exception:
+                                    pass
+
+                                items.append({
+                                    "backup_id": clean_name.removesuffix(".tar.gz").removesuffix(".tar").removesuffix(".zip"),
+                                    "name": clean_name,
+                                    "filename": clean_name,
+                                    "size": file_size,
+                                    "date": file_date,
+                                    "protocol": "ftp",
+                                })
+
+                    if items:
+                        listed = True
+
+                if not listed:
+                    # Pass 3: Fallback to NLST + SIZE/MDTM
                     names = ftp.nlst()
                     for raw_name in names:
                         clean_name = os.path.basename(raw_name)
                         if clean_name.endswith((".tar", ".tar.gz", ".zip")):
                             size = 0
-                            try:
-                                size = ftp.size(raw_name) or 0
-                            except Exception:
-                                pass
+                            for test_target in (raw_name, clean_name):
+                                try:
+                                    s = ftp.size(test_target)
+                                    if s and s > 0:
+                                        size = s
+                                        break
+                                except Exception:
+                                    pass
                             file_date = datetime.now(timezone.utc).isoformat()
                             try:
-                                mdtm_resp = ftp.sendcmd(f"MDTM {raw_name}")
+                                mdtm_resp = ftp.sendcmd(f"MDTM {clean_name}")
                                 if mdtm_resp.startswith("213 ") and len(mdtm_resp.strip()) >= 18:
                                     dt = datetime.strptime(mdtm_resp[4:].strip(), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
                                     file_date = dt.isoformat()
