@@ -42,6 +42,8 @@ from .backup import (
     notify_backup_agents_updated,
 )
 from .const import (
+    BACKUP_TYPE_FULL,
+    BACKUP_TYPE_PARTIAL,
     CONF_AUTO_CLEAN_ENABLED,
     CONF_BACKUP_NAME_TEMPLATE,
     CONF_DESTINATION_TYPE,
@@ -88,6 +90,9 @@ from .const import (
     PROTO_GOOGLE_DRIVE,
     PROTO_LOCAL_SHARE,
     PROTO_WEBDAV,
+    RESTORE_MODE_DOWNLOAD_ONLY,
+    RESTORE_MODE_FULL,
+    RESTORE_MODE_PARTIAL,
     SERVICE_CLEAN_OLD_BACKUPS,
     SERVICE_CREATE_BACKUP,
     SERVICE_RESTORE_BACKUP,
@@ -668,6 +673,24 @@ async def async_get_ha_backup_info(hass: HomeAssistant) -> dict[str, Any]:
     return info
 
 
+async def async_get_installed_addons(hass: HomeAssistant) -> list[dict[str, Any]]:
+    """Query Supervisor API to retrieve installed add-ons."""
+    res = await async_query_supervisor(hass, "/addons")
+    if res and isinstance(res, dict) and "data" in res and "addons" in res["data"]:
+        addons_list = []
+        for a in res["data"]["addons"]:
+            if a.get("installed", True):
+                addons_list.append({
+                    "slug": str(a.get("slug", "")),
+                    "name": str(a.get("name", a.get("slug", ""))),
+                    "version": str(a.get("version", "")),
+                    "state": str(a.get("state", "")),
+                    "icon": bool(a.get("icon", False)),
+                })
+        return sorted(addons_list, key=lambda x: x["name"].lower())
+    return []
+
+
 class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     """Coordinator managing DomoLink-BackUp state, tasks and synchronization."""
 
@@ -969,11 +992,18 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         name: str | None = None,
         include_database: bool = True,
         mode: str = "MANUEL",
+        backup_type: str = BACKUP_TYPE_FULL,
+        homeassistant: bool = True,
+        addons: list[str] | None = None,
+        folders: list[str] | None = None,
     ) -> bool:
         """Create a Home Assistant backup archive and upload it to remote storage."""
         if self.data.get("is_busy"):
             _LOGGER.warning("DomoLink-BackUp: Une opération de sauvegarde est déjà en cours.")
             return False
+
+        if backup_type == BACKUP_TYPE_PARTIAL and mode == "MANUEL":
+            mode = "PARTIEL"
 
         # 1. Resolve backup title & safe filename from template
         raw_template = self.entry.options.get(
@@ -1096,28 +1126,74 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             # Trigger backup service
             backup_task = None
-            if self.hass.services.has_service("hassio", "backup_full"):
-                _LOGGER.info("DomoLink-BackUp: Appel du service hassio.backup_full ('%s')", backup_title)
-                self.update_progress(STAGE_CREATING_LOCAL, 12, "Service hassio.backup_full", "Création par Supervisor...", log_msg="Service hassio.backup_full déclenché.")
-                backup_task = self.hass.async_create_task(
-                    self.hass.services.async_call("hassio", "backup_full", {"name": backup_title}, blocking=True),
-                    name=f"{DOMAIN}_hassio_backup_call",
-                )
-            elif self.hass.services.has_service("backup", "create"):
-                _LOGGER.info("DomoLink-BackUp: Appel du service backup.create")
-                self.update_progress(STAGE_CREATING_LOCAL, 12, "Service backup.create", "Création par Core...", log_msg="Service backup.create déclenché.")
-                backup_task = self.hass.async_create_task(
-                    self.hass.services.async_call("backup", "create", {}, blocking=True),
-                    name=f"{DOMAIN}_backup_create_call",
-                )
-            elif self.hass.services.has_service("backup", "create_automatic"):
-                _LOGGER.info("DomoLink-BackUp: Appel du service backup.create_automatic")
-                backup_task = self.hass.async_create_task(
-                    self.hass.services.async_call("backup", "create_automatic", {}, blocking=True),
-                    name=f"{DOMAIN}_backup_create_auto_call",
-                )
+            if backup_type == BACKUP_TYPE_PARTIAL:
+                if self.hass.services.has_service("hassio", "backup_partial"):
+                    service_data: dict[str, Any] = {"name": backup_title}
+                    if homeassistant is not None:
+                        service_data["homeassistant"] = bool(homeassistant)
+                    if addons is not None:
+                        service_data["addons"] = list(addons)
+                    if folders is not None:
+                        service_data["folders"] = list(folders)
+                    _LOGGER.info("DomoLink-BackUp: Appel du service hassio.backup_partial: %s", service_data)
+                    self.update_progress(
+                        STAGE_CREATING_LOCAL,
+                        12,
+                        "Service hassio.backup_partial",
+                        "Création de la sauvegarde partielle / incrémentielle...",
+                        log_msg=f"Service hassio.backup_partial déclenché (HA Core: {homeassistant}, Add-ons: {len(addons or [])}, Dossiers: {len(folders or [])}).",
+                    )
+                    backup_task = self.hass.async_create_task(
+                        self.hass.services.async_call("hassio", "backup_partial", service_data, blocking=True),
+                        name=f"{DOMAIN}_hassio_backup_call",
+                    )
+                elif self.hass.services.has_service("backup", "create"):
+                    service_data = {"name": backup_title}
+                    if homeassistant is not None:
+                        service_data["include_homeassistant"] = bool(homeassistant)
+                    if include_database is not None:
+                        service_data["include_database"] = bool(include_database)
+                    if addons is not None:
+                        service_data["include_addons"] = list(addons)
+                    if folders is not None:
+                        service_data["include_folders"] = list(folders)
+                    _LOGGER.info("DomoLink-BackUp: Appel backup.create (partiel): %s", service_data)
+                    self.update_progress(
+                        STAGE_CREATING_LOCAL,
+                        12,
+                        "Service backup.create",
+                        "Création de la sauvegarde partielle...",
+                        log_msg="Service backup.create partiel déclenché.",
+                    )
+                    backup_task = self.hass.async_create_task(
+                        self.hass.services.async_call("backup", "create", service_data, blocking=True),
+                        name=f"{DOMAIN}_backup_create_call",
+                    )
+                else:
+                    raise RuntimeError("Aucun service de sauvegarde partielle Home Assistant disponible.")
             else:
-                raise RuntimeError("Aucun service de sauvegarde Home Assistant (hassio ou backup) disponible.")
+                if self.hass.services.has_service("hassio", "backup_full"):
+                    _LOGGER.info("DomoLink-BackUp: Appel du service hassio.backup_full ('%s')", backup_title)
+                    self.update_progress(STAGE_CREATING_LOCAL, 12, "Service hassio.backup_full", "Création par Supervisor...", log_msg="Service hassio.backup_full déclenché.")
+                    backup_task = self.hass.async_create_task(
+                        self.hass.services.async_call("hassio", "backup_full", {"name": backup_title}, blocking=True),
+                        name=f"{DOMAIN}_hassio_backup_call",
+                    )
+                elif self.hass.services.has_service("backup", "create"):
+                    _LOGGER.info("DomoLink-BackUp: Appel du service backup.create")
+                    self.update_progress(STAGE_CREATING_LOCAL, 12, "Service backup.create", "Création par Core...", log_msg="Service backup.create déclenché.")
+                    backup_task = self.hass.async_create_task(
+                        self.hass.services.async_call("backup", "create", {}, blocking=True),
+                        name=f"{DOMAIN}_backup_create_call",
+                    )
+                elif self.hass.services.has_service("backup", "create_automatic"):
+                    _LOGGER.info("DomoLink-BackUp: Appel du service backup.create_automatic")
+                    backup_task = self.hass.async_create_task(
+                        self.hass.services.async_call("backup", "create_automatic", {}, blocking=True),
+                        name=f"{DOMAIN}_backup_create_auto_call",
+                    )
+                else:
+                    raise RuntimeError("Aucun service de sauvegarde Home Assistant (hassio ou backup) disponible.")
 
             # 4. Polling with deadline up to 600 seconds (10 minutes)
             deadline = time.monotonic() + 600
@@ -1519,12 +1595,23 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "duration_sec": round(elapsed, 1),
                     "duration_formatted": duration_formatted,
                     "compression_ratio": "Archive compressée (.tar ~35% de gain)",
-                    "components": [
-                        "Configuration Home Assistant (/config)",
-                        "Base de données SQLite / MariaDB" if include_database else "Base de données (exclue)",
-                        "Modules complémentaires (Add-ons)",
-                        "Certificats SSL & Dossiers partagés",
-                    ],
+                    "components": (
+                        [
+                            "Type: Sauvegarde Partielle / Incrémentielle",
+                            f"Core HA: {'Inclus' if homeassistant else 'Exclu'}",
+                            "Base de données SQLite / MariaDB" if include_database else "Base de données (exclue)",
+                            f"Add-ons: {len(addons) if addons is not None else 'Tous'}",
+                            f"Dossiers: {len(folders) if folders is not None else 'Tous'}",
+                        ]
+                        if backup_type == BACKUP_TYPE_PARTIAL
+                        else [
+                            "Type: Sauvegarde Complète",
+                            "Configuration Home Assistant (/config)",
+                            "Base de données SQLite / MariaDB" if include_database else "Base de données (exclue)",
+                            "Tous les modules complémentaires (Add-ons)",
+                            "Tous les dossiers partagés (/share, /ssl, /media)",
+                        ]
+                    ),
                     "completed_at": datetime.now(timezone.utc).isoformat(),
                     "status": "success",
                 }
@@ -1707,7 +1794,10 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_restore_backup(
         self,
         filename: str,
-        restore_mode: str = "download_only",
+        restore_mode: str = RESTORE_MODE_DOWNLOAD_ONLY,
+        restore_homeassistant: bool = True,
+        restore_addons: list[str] | None = None,
+        restore_folders: list[str] | None = None,
     ) -> bool:
         """Download remote backup archive and optionally trigger system restoration."""
         if self.data.get("is_busy"):
@@ -1885,6 +1975,68 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 self.async_set_updated_data(self.data)
                 return True
 
+            # 5. If mode is partial_restore, trigger partial restoration
+            elif restore_mode in ("partial_restore", RESTORE_MODE_PARTIAL):
+                target_slug = internal_slug or clean_filename.removesuffix(".tar")
+                self.set_status(
+                    STATE_RESTORING,
+                    f"Restauration partielle de '{backup_display_name}'...",
+                    is_busy=True,
+                )
+                self.update_progress(
+                    STAGE_RESTORING,
+                    95,
+                    "Restauration partielle",
+                    "Application sélective des composants choisis...",
+                    log_msg=f"⚡ Lancement de la restauration partielle pour l'archive '{backup_display_name}' (slug: {target_slug}, Core: {restore_homeassistant}, Addons: {len(restore_addons or [])}, Dossiers: {len(restore_folders or [])})...",
+                    level="warning",
+                )
+                await self.notifier.async_notify_start(f"Restauration partielle : {backup_display_name}", "Home Assistant (Système)")
+
+                # Trigger partial restore service
+                if self.hass.services.has_service("hassio", "backup_restore_partial"):
+                    service_data: dict[str, Any] = {
+                        "slug": target_slug,
+                        "homeassistant": bool(restore_homeassistant),
+                    }
+                    if restore_addons is not None:
+                        service_data["addons"] = list(restore_addons)
+                    if restore_folders is not None:
+                        service_data["folders"] = list(restore_folders)
+                    _LOGGER.info("DomoLink-BackUp: Appel hassio.backup_restore_partial: %s", service_data)
+                    await self.hass.services.async_call(
+                        "hassio", "backup_restore_partial", service_data, blocking=False
+                    )
+                elif self.hass.services.has_service("backup", "restore"):
+                    _LOGGER.info("DomoLink-BackUp: Appel backup.restore pour backup_id %s", target_slug)
+                    await self.hass.services.async_call(
+                        "backup", "restore", {"backup_id": target_slug}, blocking=False
+                    )
+                else:
+                    raise RuntimeError("Aucun service de restauration Home Assistant disponible.")
+
+                restore_report = {
+                    "operation": "Restauration Partielle / Incrémentielle",
+                    "backup_name": backup_display_name,
+                    "destination": "Home Assistant (Composants sélectionnés)",
+                    "source_path": f"{dest_label}/{clean_filename}",
+                    "size_bytes": final_size,
+                    "size_mb": final_mb,
+                    "duration_sec": elapsed_total,
+                    "duration_formatted": f"{int(elapsed_total // 60)}m {int(elapsed_total % 60)}s" if elapsed_total >= 60 else f"{elapsed_total}s",
+                    "compression_ratio": "Archive .tar d'origine",
+                    "components": [
+                        f"Slug: {target_slug}",
+                        f"Home Assistant Core: {'Inclus' if restore_homeassistant else 'Exclu'}",
+                        f"Add-ons restaurés: {len(restore_addons) if restore_addons else '0'}",
+                        f"Dossiers restaurés: {len(restore_folders) if restore_folders else '0'}",
+                    ],
+                }
+                self.data["last_report"] = restore_report
+                self.data["progress"]["report"] = restore_report
+                self.async_set_updated_data(self.data)
+                return True
+
             # Otherwise (download_only):
             self.set_status(STATE_SUCCESS, f"Rapatriement réussi ({final_mb} Mo)", is_busy=False)
             restore_report = {
@@ -2002,7 +2154,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def _handle_create_backup(call: ServiceCall) -> None:
         name = call.data.get("name")
         include_db = call.data.get("include_database", True)
-        await coordinator.async_create_and_upload_backup(name, include_db)
+        backup_type = call.data.get("backup_type", BACKUP_TYPE_FULL)
+        homeassistant = call.data.get("homeassistant", True)
+        addons = call.data.get("addons")
+        folders = call.data.get("folders")
+        await coordinator.async_create_and_upload_backup(
+            name=name,
+            include_database=include_db,
+            backup_type=backup_type,
+            homeassistant=homeassistant,
+            addons=addons,
+            folders=folders,
+        )
 
     async def _handle_upload_backup(call: ServiceCall) -> None:
         file_path = call.data.get("file_path")
@@ -2011,9 +2174,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def _handle_restore_backup(call: ServiceCall) -> None:
         filename = call.data.get("filename")
-        restore_mode = call.data.get("restore_mode", "download_only")
+        restore_mode = call.data.get("restore_mode", RESTORE_MODE_DOWNLOAD_ONLY)
+        restore_homeassistant = call.data.get("restore_homeassistant", True)
+        restore_addons = call.data.get("restore_addons")
+        restore_folders = call.data.get("restore_folders")
         if filename:
-            await coordinator.async_restore_backup(filename, restore_mode)
+            await coordinator.async_restore_backup(
+                filename=filename,
+                restore_mode=restore_mode,
+                restore_homeassistant=restore_homeassistant,
+                restore_addons=restore_addons,
+                restore_folders=restore_folders,
+            )
 
     async def _handle_test_connection(call: ServiceCall) -> None:
         await coordinator.async_run_test_connection()
@@ -2027,13 +2199,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     schema_create = vol.Schema({
         vol.Optional("name"): str,
         vol.Optional("include_database", default=True): bool,
+        vol.Optional("backup_type", default=BACKUP_TYPE_FULL): vol.In([BACKUP_TYPE_FULL, BACKUP_TYPE_PARTIAL]),
+        vol.Optional("homeassistant", default=True): bool,
+        vol.Optional("addons"): [str],
+        vol.Optional("folders"): [str],
     })
     schema_upload = vol.Schema({
         vol.Required("file_path"): str,
     })
     schema_restore = vol.Schema({
         vol.Required("filename"): str,
-        vol.Optional("restore_mode", default="download_only"): vol.In(["download_only", "full_restore"]),
+        vol.Optional("restore_mode", default=RESTORE_MODE_DOWNLOAD_ONLY): vol.In(
+            [RESTORE_MODE_DOWNLOAD_ONLY, RESTORE_MODE_FULL, RESTORE_MODE_PARTIAL]
+        ),
+        vol.Optional("restore_homeassistant", default=True): bool,
+        vol.Optional("restore_addons"): [str],
+        vol.Optional("restore_folders"): [str],
     })
 
     hass.services.async_register(DOMAIN, SERVICE_CREATE_BACKUP, _handle_create_backup, schema=schema_create)
@@ -2068,8 +2249,8 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
     """Register WebSocket API handlers for the frontend dashboard panel."""
 
     @websocket_command({vol.Required("type"): "domolink_backup/get_data"})
-    @callback
-    def ws_get_data(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
+    @async_response
+    async def ws_get_data(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
         coordinator = _get_active_coordinator(hass)
         if not coordinator:
             connection.send_error(msg["id"], "not_found", "Coordinateur DomoLink-BackUp non initialisé")
@@ -2088,12 +2269,22 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         )
         coordinator.data["resolved_template_name"] = preview_title
 
+        installed_addons = await async_get_installed_addons(hass)
+        available_folders = [
+            {"id": "share", "name": "Partage réseau (/share)"},
+            {"id": "ssl", "name": "Certificats SSL/TLS (/ssl)"},
+            {"id": "media", "name": "Médias (/media)"},
+            {"id": "addons/local", "name": "Extensions locales (/addons/local)"},
+        ]
+
         connection.send_result(
             msg["id"],
             {
                 "data": coordinator.data,
                 "config": safe_cfg,
                 "version": VERSION,
+                "installed_addons": installed_addons,
+                "available_folders": available_folders,
             },
         )
 
@@ -2102,6 +2293,10 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         vol.Optional("name"): str,
         vol.Optional("include_database", default=True): bool,
         vol.Optional("mode", default="MANUEL"): str,
+        vol.Optional("backup_type", default=BACKUP_TYPE_FULL): vol.In([BACKUP_TYPE_FULL, BACKUP_TYPE_PARTIAL]),
+        vol.Optional("homeassistant", default=True): bool,
+        vol.Optional("addons"): [str],
+        vol.Optional("folders"): [str],
     })
     @async_response
     async def ws_trigger_backup(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
@@ -2112,8 +2307,20 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         name = msg.get("name")
         include_db = msg.get("include_database", True)
         mode = msg.get("mode", "MANUEL")
+        backup_type = msg.get("backup_type", BACKUP_TYPE_FULL)
+        homeassistant = msg.get("homeassistant", True)
+        addons = msg.get("addons")
+        folders = msg.get("folders")
         hass.async_create_task(
-            coordinator.async_create_and_upload_backup(name, include_db, mode=mode),
+            coordinator.async_create_and_upload_backup(
+                name=name,
+                include_database=include_db,
+                mode=mode,
+                backup_type=backup_type,
+                homeassistant=homeassistant,
+                addons=addons,
+                folders=folders,
+            ),
             name=f"{DOMAIN}_ws_trigger_backup",
         )
         connection.send_result(msg["id"], {"status": "started"})
@@ -2198,7 +2405,12 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
     @websocket_command({
         vol.Required("type"): "domolink_backup/restore_backup",
         vol.Required("filename"): str,
-        vol.Optional("restore_mode", default="download_only"): vol.In(["download_only", "full_restore"]),
+        vol.Optional("restore_mode", default=RESTORE_MODE_DOWNLOAD_ONLY): vol.In(
+            [RESTORE_MODE_DOWNLOAD_ONLY, RESTORE_MODE_FULL, RESTORE_MODE_PARTIAL]
+        ),
+        vol.Optional("restore_homeassistant", default=True): bool,
+        vol.Optional("restore_addons"): [str],
+        vol.Optional("restore_folders"): [str],
     })
     @async_response
     async def ws_restore_backup(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
@@ -2207,9 +2419,18 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
             connection.send_error(msg["id"], "not_found", "Coordinateur non disponible")
             return
         filename = msg["filename"]
-        restore_mode = msg.get("restore_mode", "download_only")
+        restore_mode = msg.get("restore_mode", RESTORE_MODE_DOWNLOAD_ONLY)
+        restore_homeassistant = msg.get("restore_homeassistant", True)
+        restore_addons = msg.get("restore_addons")
+        restore_folders = msg.get("restore_folders")
         hass.async_create_task(
-            coordinator.async_restore_backup(filename, restore_mode),
+            coordinator.async_restore_backup(
+                filename,
+                restore_mode=restore_mode,
+                restore_homeassistant=restore_homeassistant,
+                restore_addons=restore_addons,
+                restore_folders=restore_folders,
+            ),
             name=f"{DOMAIN}_restore_task",
         )
         connection.send_result(msg["id"], {"success": True, "status": "started"})

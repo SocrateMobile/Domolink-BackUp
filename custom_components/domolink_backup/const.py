@@ -6,7 +6,15 @@ import re
 DOMAIN = "domolink_backup"
 NAME = "DomoLink-BackUp"
 DEFAULT_NAME = "DomoLink-BackUp"
-VERSION = "1.3.0"
+VERSION = "1.4.0"
+
+# Backup and Restore Types
+BACKUP_TYPE_FULL = "full"
+BACKUP_TYPE_PARTIAL = "partial"
+
+RESTORE_MODE_DOWNLOAD_ONLY = "download_only"
+RESTORE_MODE_FULL = "full_restore"
+RESTORE_MODE_PARTIAL = "partial_restore"
 
 # Storage key for persistent state
 STORAGE_KEY = "domolink_backup_data"
