@@ -257,6 +257,33 @@ def _sync_ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 
+def _format_eta(seconds: int | float | None) -> str:
+    """Format estimated remaining time (ETA):
+    - >= 1h: 'HH:MM:SS'
+    - >= 10m and < 1h: 'MM:SS'
+    - >= 1m and < 10m: 'M:SS'
+    - < 1m: 'SS secondes'
+    """
+    if seconds is None:
+        return "En calcul..."
+    try:
+        s = max(0, int(round(float(seconds))))
+    except (ValueError, TypeError):
+        return "En calcul..."
+
+    if s < 60:
+        return f"{s:02d} secondes"
+    m = s // 60
+    sec = s % 60
+    if m < 10:
+        return f"{m}:{sec:02d}"
+    if m < 60:
+        return f"{m:02d}:{sec:02d}"
+    h = s // 3600
+    rem_m = (s % 3600) // 60
+    return f"{h:02d}:{rem_m:02d}:{sec:02d}"
+
+
 def _sync_get_all_system_mount_points() -> list[str]:
     """Inspect /proc/mounts and /etc/mtab to discover mounted partitions and external storage."""
     mounts: list[str] = []
@@ -876,8 +903,9 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         speed_kbps: float | None = None,
         eta_seconds: int | None = None,
         report: dict[str, Any] | None = None,
+        log_tag: str | None = None,
     ) -> None:
-        """Update live progress and append timestamped log message."""
+        """Update live progress and append or update timestamped log message."""
         p = self.data.setdefault("progress", {})
         p["active"] = stage not in (STAGE_IDLE, STAGE_COMPLETED, STAGE_FAILED)
         p["stage"] = stage
@@ -895,6 +923,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             p["speed_kbps"] = speed_kbps
         if eta_seconds is not None:
             p["eta_seconds"] = eta_seconds
+            p["eta_formatted"] = _format_eta(eta_seconds)
         if report is not None:
             p["report"] = report
             self.data["last_report"] = report
@@ -902,12 +931,26 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if log_msg:
             now_str = datetime.now().strftime("%H:%M:%S")
             logs = p.setdefault("logs", [])
-            logs.append({
+
+            if log_tag:
+                # Look for existing log entry with this tag to update in place
+                for existing in reversed(logs):
+                    if existing.get("tag") == log_tag:
+                        existing["time"] = now_str
+                        existing["message"] = log_msg
+                        existing["level"] = level
+                        self.async_set_updated_data(self.data)
+                        return
+
+            entry_dict: dict[str, Any] = {
                 "time": now_str,
                 "stage": stage,
                 "message": log_msg,
                 "level": level,
-            })
+            }
+            if log_tag:
+                entry_dict["tag"] = log_tag
+            logs.append(entry_dict)
             if len(logs) > 150:
                 p["logs"] = logs[-150:]
 
@@ -1077,6 +1120,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         dest_label = self.storage_engine.destination_label
         start_time = time.monotonic()
         started_epoch = time.time()
+        self.data.setdefault("progress", {})["logs"] = []
 
         self.set_status(STATE_BACKING_UP, f"Création locale de '{backup_title}'...", is_busy=True)
         self.update_progress(
@@ -1455,6 +1499,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             "Création locale en cours",
                             f"Attente de finalisation ({elapsed_now}s écoulées)...",
                             log_msg=f"Scrutation des archives ({elapsed_now}s écoulées)...",
+                            log_tag="poll_progress",
                         )
 
             # Check if task failed with an exception
@@ -1581,29 +1626,36 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 speed_bytes_sec = bytes_sent / up_elapsed
                 speed_mb_sec = round(speed_bytes_sec / (1024 * 1024), 2)
                 remaining_bytes = max(0, file_size - bytes_sent)
-                eta_sec = int(remaining_bytes / speed_bytes_sec) if speed_bytes_sec > 0 else 0
+                eta_sec = int(remaining_bytes / speed_bytes_sec) if (speed_bytes_sec > 0 and remaining_bytes > 0) else (0 if remaining_bytes == 0 else None)
                 sent_mb = round(bytes_sent / (1024 * 1024), 1)
+                eta_fmt = _format_eta(eta_sec)
 
-                self.update_progress(
-                    STAGE_UPLOADING,
-                    pct,
-                    "Téléversement distant",
-                    f"{sent_mb} Mo / {size_mb} Mo ({pct}%) • {speed_mb_sec} Mo/s",
-                    current_file=remote_filename,
-                    transferred_bytes=bytes_sent,
-                    total_bytes=file_size,
-                    speed_kbps=round(speed_bytes_sec / 1024, 1),
-                    eta_seconds=eta_sec,
-                )
-
-                if now_mono - last_progress_log >= 3.0 or bytes_sent >= file_size:
+                if now_mono - last_progress_log >= 1.5 or bytes_sent >= file_size:
                     last_progress_log = now_mono
                     self.update_progress(
                         STAGE_UPLOADING,
                         pct,
                         "Téléversement distant",
-                        f"{sent_mb} Mo / {size_mb} Mo ({pct}%)",
-                        log_msg=f"Téléversement : {sent_mb} Mo / {size_mb} Mo ({pct}%) - {speed_mb_sec} Mo/s (ETA: {eta_sec}s)",
+                        f"{sent_mb} Mo / {size_mb} Mo ({pct}%) • {speed_mb_sec} Mo/s",
+                        current_file=remote_filename,
+                        transferred_bytes=bytes_sent,
+                        total_bytes=file_size,
+                        speed_kbps=round(speed_bytes_sec / 1024, 1),
+                        eta_seconds=eta_sec,
+                        log_msg=f"Téléversement : {sent_mb} Mo / {size_mb} Mo ({pct}%) - {speed_mb_sec} Mo/s (ETA: {eta_fmt})",
+                        log_tag="upload_progress",
+                    )
+                else:
+                    self.update_progress(
+                        STAGE_UPLOADING,
+                        pct,
+                        "Téléversement distant",
+                        f"{sent_mb} Mo / {size_mb} Mo ({pct}%) • {speed_mb_sec} Mo/s",
+                        current_file=remote_filename,
+                        transferred_bytes=bytes_sent,
+                        total_bytes=file_size,
+                        speed_kbps=round(speed_bytes_sec / 1024, 1),
+                        eta_seconds=eta_sec,
                     )
 
             upload_success = await self.storage_engine.async_upload(
@@ -1886,6 +1938,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             None,
         )
         expected_size = target.get("size", 0) if target else 0
+        self.data.setdefault("progress", {})["logs"] = []
 
         self.set_status(
             STATE_DOWNLOADING,
@@ -1917,34 +1970,44 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             speed_mb_sec = round(speed_bytes_sec / (1024 * 1024), 2)
             received_mb = round(bytes_received / (1024 * 1024), 1)
 
+            eta_dl_sec = int((expected_size - bytes_received) / speed_bytes_sec) if (expected_size > bytes_received and speed_bytes_sec > 0) else (0 if expected_size > 0 and bytes_received >= expected_size else None)
+            eta_dl_fmt = f" (ETA: {_format_eta(eta_dl_sec)})" if eta_dl_sec is not None else ""
+
             if expected_size > 0:
                 pct = 5 + int((bytes_received / expected_size) * 75)
                 pct = min(pct, 80)
                 tot_mb = round(expected_size / (1024 * 1024), 1)
-                detail = f"{received_mb} Mo / {tot_mb} Mo ({pct}%) • {speed_mb_sec} Mo/s"
+                detail = f"{received_mb} Mo / {tot_mb} Mo ({pct}%) • {speed_mb_sec} Mo/s{eta_dl_fmt}"
             else:
                 pct = min(80, 10 + int(bytes_received / (10 * 1024 * 1024)))
                 detail = f"{received_mb} Mo téléchargés • {speed_mb_sec} Mo/s"
 
-            self.update_progress(
-                STAGE_DOWNLOADING,
-                pct,
-                "Rapatriement distant",
-                detail,
-                current_file=clean_filename,
-                transferred_bytes=bytes_received,
-                total_bytes=expected_size,
-                speed_kbps=round(speed_bytes_sec / 1024, 1),
-            )
-
-            if now_mono - last_log >= 3.0:
+            if now_mono - last_log >= 1.5 or (expected_size > 0 and bytes_received >= expected_size):
                 last_log = now_mono
                 self.update_progress(
                     STAGE_DOWNLOADING,
                     pct,
                     "Rapatriement distant",
                     detail,
+                    current_file=clean_filename,
+                    transferred_bytes=bytes_received,
+                    total_bytes=expected_size,
+                    speed_kbps=round(speed_bytes_sec / 1024, 1),
+                    eta_seconds=eta_dl_sec,
                     log_msg=f"Téléchargement : {detail}",
+                    log_tag="download_progress",
+                )
+            else:
+                self.update_progress(
+                    STAGE_DOWNLOADING,
+                    pct,
+                    "Rapatriement distant",
+                    detail,
+                    current_file=clean_filename,
+                    transferred_bytes=bytes_received,
+                    total_bytes=expected_size,
+                    speed_kbps=round(speed_bytes_sec / 1024, 1),
+                    eta_seconds=eta_dl_sec,
                 )
 
         try:

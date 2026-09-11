@@ -88,6 +88,29 @@ function formatDuration(seconds) {
   return `${m}m ${rem}s`;
 }
 
+function formatEta(seconds) {
+  if (seconds === null || seconds === undefined || isNaN(seconds) || seconds < 0) return "—";
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) {
+    return `${String(s).padStart(2, "0")} secondes`;
+  }
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  const secStr = String(sec).padStart(2, "0");
+  if (m < 10) {
+    return `${m}:${secStr}`;
+  }
+  if (m < 60) {
+    const minStr = String(m).padStart(2, "0");
+    return `${minStr}:${secStr}`;
+  }
+  const h = Math.floor(s / 3600);
+  const remMin = Math.floor((s % 3600) / 60);
+  const hourStr = String(h).padStart(2, "0");
+  const remMinStr = String(remMin).padStart(2, "0");
+  return `${hourStr}:${remMinStr}:${secStr}`;
+}
+
 class DomoLinkBackupPanel extends HTMLElement {
   constructor() {
     super();
@@ -95,7 +118,7 @@ class DomoLinkBackupPanel extends HTMLElement {
     this._hass = null;
     this._data = {};
     this._config = {};
-    this._version = "1.4.2";
+    this._version = "1.4.3";
     this._activeTab = "dashboard";
     this._refreshTimer = null;
     this._showBackupModal = false;
@@ -449,9 +472,33 @@ class DomoLinkBackupPanel extends HTMLElement {
 
     const progress = d.progress || { active: false, percent: 0, step_title: "Prêt", logs: [] };
     const progressActive = progress.active || isBusy;
-    const progressPercent = Math.max(0, Math.min(100, progress.percent || 0));
-    const progressLogs = progress.logs || [];
-    const report = (this._showReport && (progress.report || d.last_report)) ? (progress.report || d.last_report) : null;
+    const rawProgressLogs = progress.logs || [];
+    const progressLogs = [];
+    for (let i = 0; i < rawProgressLogs.length; i++) {
+      const l = rawProgressLogs[i];
+      const isProgressLine = l.tag || (l.message && (
+        l.message.startsWith("Téléversement :") ||
+        l.message.startsWith("Téléchargement :") ||
+        l.message.startsWith("Scrutation des archives")
+      ));
+      if (isProgressLine) {
+        const existingIdx = progressLogs.findIndex(item =>
+          (l.tag && item.tag === l.tag) ||
+          (l.message && item.message && (
+            (l.message.startsWith("Téléversement :") && item.message.startsWith("Téléversement :")) ||
+            (l.message.startsWith("Téléchargement :") && item.message.startsWith("Téléchargement :")) ||
+            (l.message.startsWith("Scrutation des archives") && item.message.startsWith("Scrutation des archives"))
+          ))
+        );
+        if (existingIdx !== -1) {
+          progressLogs[existingIdx] = l;
+        } else {
+          progressLogs.push(l);
+        }
+      } else {
+        progressLogs.push(l);
+      }
+    }
 
     const currentTpl = this._templateInputVal || d.backup_name_template || cfg.backup_name_template || DEFAULT_TEMPLATE;
     const tplPreview = evaluateTemplate(currentTpl, "MANUEL");
@@ -1271,7 +1318,7 @@ class DomoLinkBackupPanel extends HTMLElement {
                   </div>
                   <div class="metric-item">
                     <span class="metric-lbl">Temps restant estimé</span>
-                    <span class="metric-val">${progress.eta_seconds ? progress.eta_seconds + ' s' : '—'}</span>
+                    <span class="metric-val">${progress.eta_seconds !== undefined && progress.eta_seconds !== null ? (progress.eta_seconds > 0 ? formatEta(progress.eta_seconds) : (progress.transferred_bytes && progress.total_bytes && progress.transferred_bytes >= progress.total_bytes ? '00 secondes' : 'En calcul...')) : (progress.eta_formatted || '—')}</span>
                   </div>
                 </div>
               ` : ''}
