@@ -1,12 +1,29 @@
 # 💾 DomoLink-BackUp pour Home Assistant
 
 [![HACS Compatible](https://img.shields.io/badge/HACS-Custom-blue.svg)](https://github.com/SocrateMobile/Domolink-BackUp)
-[![Version](https://img.shields.io/badge/version-1.1.3-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
+[![Version](https://img.shields.io/badge/version-1.2.0-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 
 Dans la lignée directe de **DomoLink-Alarm** et **DomoLink-Mistral IA**, **DomoLink-BackUp** est une intégration Home Assistant puissante et clé en main dédiée au **stockage distant, automatique et sécurisé des sauvegardes de votre domotique**.
 
 Elle reprend l'ergonomie, la mécanique et le paramétrage éprouvés de la suite DomoLink (profils NAS Asustor, Synology, QNAP, TrueNAS, Freebox, Unraid, transferts FTP/FTPS, WebDAV/Nextcloud, Google Drive sans clé API complexe, alertes Telegram et purge FIFO automatique).
+
+---
+
+## 🚀 Nouveautés Majeures de la Version 1.2.0
+
+- **📝 Modèle de nommage dynamique personnalisable** :
+  - Support des variables dynamiques : `$Date` (ex: `01/02/2026`), `$Heure` (ex: `20H28`), `$Mode` (`MANUEL` ou `AUTO`).
+  - Format par défaut pré-rempli optimisé pour la recherche : `$Date $Heure BackUp Home Assistant $Mode`.
+  - Configurable et personnalisable directement depuis les options de l'intégration et le tableau de bord avec aperçu en temps réel.
+  - Fenêtre modale interactive lors du clic sur « Sauvegarder maintenant » permettant d'ajuster le nom à la volée.
+- **📡 Suivi en direct ultra-bavard avec barre de progression** :
+  - Barre d'avancement animée étape par étape (0% à 100%).
+  - Journal de bord en continu affichant chaque étape système (déclenchement Supervisor/Core, compression, détection, upload en flux continu avec vitesse en Mo/s et temps restant estimé).
+- **📋 Rapport complet de fin de sauvegarde** :
+  - Synthèse visuelle récapitulative : nom généré, cible distante, chemin source de l'archive, taille en Mo, taux de compression estimé, durée exacte et composants inclus.
+- **🛡️ Détection robuste des archives Home Assistant** :
+  - Balayage multi-répertoires (`/backup`, `/backups`, `/config/backups`, `/share/backups`, etc.), écoute du `BackupManager` Home Assistant et détection active de croissance de fichier jusqu'à 600 secondes.
 
 ---
 

@@ -1,10 +1,12 @@
-"""Constants for the DomoLink-BackUp integration."""
 from __future__ import annotations
+
+from datetime import datetime
+import re
 
 DOMAIN = "domolink_backup"
 NAME = "DomoLink-BackUp"
 DEFAULT_NAME = "DomoLink-BackUp"
-VERSION = "1.1.3"
+VERSION = "1.2.0"
 
 # Storage key for persistent state
 STORAGE_KEY = "domolink_backup_data"
@@ -150,16 +152,18 @@ CONF_GOOGLE_DRIVE_SECRET_KEY = "google_drive_secret_key"
 CONF_LOCAL_SHARE_PATH = "local_share_path"
 DEFAULT_LOCAL_SHARE_PATH = "/share/domolink_backups"
 
-# Configuration Keys - Retention Policy
+# Configuration Keys - Retention & Naming Policy
 CONF_RETENTION_DAYS = "retention_days"
 CONF_MAX_BACKUPS_COUNT = "max_backups_count"
 CONF_MAX_STORAGE_MB = "max_storage_mb"
 CONF_AUTO_CLEAN_ENABLED = "auto_clean_enabled"
+CONF_BACKUP_NAME_TEMPLATE = "backup_name_template"
 
 DEFAULT_RETENTION_DAYS = 30
 DEFAULT_MAX_BACKUPS_COUNT = 7
 DEFAULT_MAX_STORAGE_MB = 10240  # 10 GB
 DEFAULT_AUTO_CLEAN_ENABLED = True
+DEFAULT_BACKUP_NAME_TEMPLATE = "$Date $Heure BackUp Home Assistant $Mode"
 
 # Configuration Keys - Telegram Notifications
 CONF_TELEGRAM_ENABLED = "telegram_enabled"
@@ -193,12 +197,69 @@ STATE_TESTING = "Test en cours"
 STATE_SUCCESS = "Succès"
 STATE_ERROR = "Erreur"
 
+# Progress Tracking Stages
+STAGE_IDLE = "idle"
+STAGE_PREPARING = "preparing"
+STAGE_CREATING_LOCAL = "creating_local"
+STAGE_VERIFYING = "verifying"
+STAGE_UPLOADING = "uploading"
+STAGE_FINISHING = "finishing"
+STAGE_COMPLETED = "completed"
+STAGE_FAILED = "failed"
+
 # Service Names
 SERVICE_CREATE_BACKUP = "create_backup"
 SERVICE_UPLOAD_BACKUP = "upload_backup"
 SERVICE_TEST_CONNECTION = "test_connection"
 SERVICE_CLEAN_OLD_BACKUPS = "clean_old_backups"
 SERVICE_SYNC_BACKUPS = "sync_backups"
+
+
+def resolve_backup_name_template(
+    template: str | None = None,
+    mode: str = "MANUEL",
+    now: datetime | None = None,
+) -> tuple[str, str]:
+    """Resolve a backup name template into (display_title, safe_filename).
+
+    Supported variables:
+    - $Date: formatted as DD/MM/YYYY for display, DD-MM-YYYY for safe file name.
+    - $Heure: formatted as HH\\hMM (e.g. 20H28).
+    - $Mode: MANUEL or AUTO.
+
+    Returns (display_title, safe_filename_without_ext).
+    """
+    raw_template = str(template).strip() if template and str(template).strip() else DEFAULT_BACKUP_NAME_TEMPLATE
+
+    dt = now or datetime.now()
+    date_display = dt.strftime("%d/%m/%Y")
+    date_file = dt.strftime("%d-%m-%Y")
+    hour_str = dt.strftime("%HH%M")
+    mode_str = "AUTO" if str(mode).upper() == "AUTO" else "MANUEL"
+
+    # Display title (allows slashes e.g. 01/02/2026)
+    display_title = (
+        raw_template.replace("$Date", date_display)
+        .replace("$Heure", hour_str)
+        .replace("$Mode", mode_str)
+    )
+
+    # Safe filename for filesystem / FTP (no slashes, no forbidden chars)
+    safe_name = (
+        raw_template.replace("$Date", date_file)
+        .replace("$Heure", hour_str)
+        .replace("$Mode", mode_str)
+    )
+    # Sanitize: replace spaces, slashes and special chars with underscores/dashes
+    safe_name = re.sub(r'[/\\?%*:|"<>]+', "-", safe_name)
+    safe_name = re.sub(r'\s+', "_", safe_name.strip())
+    safe_name = re.sub(r'_+', "_", safe_name)
+    safe_name = safe_name.strip("._-")
+    if not safe_name:
+        safe_name = f"HA_Backup_{date_file}_{hour_str}_{mode_str}"
+
+    return display_title, safe_name
+
 
 # Google Apps Script Source Template
 GOOGLE_APPS_SCRIPT_TEMPLATE = """/**

@@ -16,6 +16,7 @@ except ImportError:
 
 from .const import (
     CONF_AUTO_CLEAN_ENABLED,
+    CONF_BACKUP_NAME_TEMPLATE,
     CONF_FTP_HOST,
     CONF_FTP_PASS,
     CONF_FTP_PATH,
@@ -41,6 +42,8 @@ from .const import (
     CONF_WEBDAV_URL,
     CONF_WEBDAV_USER,
     CONF_WEBDAV_VERIFY_SSL,
+    DEFAULT_AUTO_CLEAN_ENABLED,
+    DEFAULT_BACKUP_NAME_TEMPLATE,
     DEFAULT_FTP_PATH,
     DEFAULT_FTP_PORT,
     DEFAULT_LOCAL_SHARE_PATH,
@@ -204,6 +207,7 @@ class DomoLinkBackupConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_RETENTION_DAYS, default=DEFAULT_RETENTION_DAYS): int,
                 vol.Required(CONF_MAX_STORAGE_MB, default=DEFAULT_MAX_STORAGE_MB): int,
                 vol.Optional(CONF_AUTO_CLEAN_ENABLED, default=True): bool,
+                vol.Optional(CONF_BACKUP_NAME_TEMPLATE, default=DEFAULT_BACKUP_NAME_TEMPLATE): str,
             }
         )
 
@@ -362,6 +366,7 @@ class DomoLinkBackupOptionsFlow(config_entries.OptionsFlow):
                 vol.Required(CONF_RETENTION_DAYS, default=int(self.options.get(CONF_RETENTION_DAYS, DEFAULT_RETENTION_DAYS))): int,
                 vol.Required(CONF_MAX_STORAGE_MB, default=int(self.options.get(CONF_MAX_STORAGE_MB, DEFAULT_MAX_STORAGE_MB))): int,
                 vol.Optional(CONF_AUTO_CLEAN_ENABLED, default=bool(self.options.get(CONF_AUTO_CLEAN_ENABLED, True))): bool,
+                vol.Optional(CONF_BACKUP_NAME_TEMPLATE, default=str(self.options.get(CONF_BACKUP_NAME_TEMPLATE, DEFAULT_BACKUP_NAME_TEMPLATE))): str,
             }
         )
 
