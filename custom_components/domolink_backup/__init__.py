@@ -252,6 +252,11 @@ SKIP_SCAN_PATH_PREFIXES = (
 )
 
 
+def _sync_ensure_dir(path: str) -> None:
+    """Safely create directory with exist_ok=True in worker thread."""
+    os.makedirs(path, exist_ok=True)
+
+
 def _sync_get_all_system_mount_points() -> list[str]:
     """Inspect /proc/mounts and /etc/mtab to discover mounted partitions and external storage."""
     mounts: list[str] = []
@@ -981,7 +986,11 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         for d in candidates:
             if d and d not in seen:
                 seen.add(d)
-                unique_dirs.append(d)
+                try:
+                    if os.path.isdir(d):
+                        unique_dirs.append(d)
+                except Exception:
+                    pass
         return unique_dirs
 
     async def async_refresh_backups_list(self) -> list[dict[str, Any]]:
@@ -1080,11 +1089,10 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.notifier.async_notify_start(backup_title, dest_label)
 
         # 2. Identify candidate directories and snapshot existing archives
-        candidate_dirs = self._get_candidate_backup_dirs()
-        existing_dirs = [d for d in candidate_dirs if await self.hass.async_add_executor_job(os.path.isdir, d)]
+        existing_dirs = await self.hass.async_add_executor_job(self._get_candidate_backup_dirs)
         if not existing_dirs:
             fallback = self.hass.config.path("backups")
-            await self.hass.async_add_executor_job(os.makedirs, fallback, exist_ok=True)
+            await self.hass.async_add_executor_job(_sync_ensure_dir, fallback)
             existing_dirs = [fallback]
 
         before_snapshot = await self.hass.async_add_executor_job(
@@ -1381,9 +1389,9 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             break
 
                 # Dynamically append newly created directories if any
-                fresh_candidates = self._get_candidate_backup_dirs()
+                fresh_candidates = await self.hass.async_add_executor_job(self._get_candidate_backup_dirs)
                 for fc in fresh_candidates:
-                    if fc not in existing_dirs and os.path.isdir(fc):
+                    if fc not in existing_dirs:
                         existing_dirs.append(fc)
 
                 # Poll filesystem (for Supervised/Container/Core installs where files are stored locally)
@@ -1703,17 +1711,25 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return False
 
         except Exception as err:
-            _LOGGER.exception("DomoLink-BackUp: Erreur pendant la sauvegarde: %s", err)
-            self.set_status(STATE_ERROR, f"Erreur : {err}", is_busy=False, error=str(err))
+            err_str = str(err)
+            user_msg = err_str
+            if "freeze" in err_str.lower() or "blocked from execution" in err_str.lower():
+                user_msg = (
+                    "Le système Supervisor est actuellement verrouillé ('freeze'). "
+                    "Une sauvegarde ou une mise à jour est déjà en cours dans Home Assistant. "
+                    "Veuillez patienter ou redémarrer le Supervisor si le blocage persiste."
+                )
+            _LOGGER.exception("DomoLink-BackUp: Erreur pendant la sauvegarde: %s", user_msg)
+            self.set_status(STATE_ERROR, f"Erreur : {user_msg}", is_busy=False, error=user_msg)
             self.update_progress(
                 STAGE_FAILED,
                 100,
                 "Erreur de sauvegarde",
-                str(err),
-                log_msg=f"✗ Erreur : {err}",
+                user_msg,
+                log_msg=f"✗ Erreur : {user_msg}",
                 level="error",
             )
-            await self.notifier.async_notify_error(backup_title, dest_label, str(err))
+            await self.notifier.async_notify_error(backup_title, dest_label, user_msg)
             return False
         finally:
             if unsub_manager_events:
@@ -1887,7 +1903,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
 
         target_dl_dir = self.hass.config.path("backups")
-        await self.hass.async_add_executor_job(os.makedirs, target_dl_dir, True)
+        await self.hass.async_add_executor_job(_sync_ensure_dir, target_dl_dir)
         local_dest = os.path.join(target_dl_dir, clean_filename)
 
         dl_start = time.monotonic()
@@ -2422,7 +2438,8 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         include_blueprints = msg.get("include_blueprints", True)
         addons = msg.get("addons")
         folders = msg.get("folders")
-        hass.async_create_task(
+        create_task = getattr(hass, "async_create_background_task", hass.async_create_task)
+        create_task(
             coordinator.async_create_and_upload_backup(
                 name=name,
                 include_database=include_db,
@@ -2543,7 +2560,8 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         restore_blueprints = msg.get("restore_blueprints", True)
         restore_addons = msg.get("restore_addons")
         restore_folders = msg.get("restore_folders")
-        hass.async_create_task(
+        create_task = getattr(hass, "async_create_background_task", hass.async_create_task)
+        create_task(
             coordinator.async_restore_backup(
                 filename,
                 restore_mode=restore_mode,
