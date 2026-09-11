@@ -658,18 +658,34 @@ class DomoLinkStorageEngine:
                 _ftp_ensure_dir(ftp, path)
 
                 total_sent = 0
+                last_cb_time = 0.0
 
                 def _chunk_callback(chunk):
-                    nonlocal total_sent
+                    nonlocal total_sent, last_cb_time
                     total_sent += len(chunk)
                     if on_progress:
-                        try:
-                            on_progress(total_sent)
-                        except Exception:
-                            pass
+                        now_cb = time.monotonic()
+                        if now_cb - last_cb_time >= 1.0 or total_sent >= size:
+                            last_cb_time = now_cb
+                            try:
+                                self.hass.loop.call_soon_threadsafe(on_progress, total_sent)
+                            except Exception:
+                                try:
+                                    on_progress(total_sent)
+                                except Exception:
+                                    pass
 
                 with open(file_path, "rb") as f:
-                    ftp.storbinary(f"STOR {filename}", f, blocksize=65536, callback=_chunk_callback)
+                    ftp.storbinary(f"STOR {filename}", f, blocksize=524288, callback=_chunk_callback)
+
+                if on_progress:
+                    try:
+                        self.hass.loop.call_soon_threadsafe(on_progress, size)
+                    except Exception:
+                        try:
+                            on_progress(size)
+                        except Exception:
+                            pass
 
                 return True
             except Exception as err:
@@ -1189,15 +1205,34 @@ class DomoLinkStorageEngine:
                 try:
                     ftp = _get_ftp_connection(host, port, user, passwd, use_tls, timeout=180)
                     _ftp_ensure_dir(ftp, path)
+                    last_cb_time = 0.0
                     with open(dest_path, "wb") as f:
                         def _callback(chunk: bytes):
-                            nonlocal bytes_received
+                            nonlocal bytes_received, last_cb_time
                             f.write(chunk)
                             bytes_received += len(chunk)
                             if on_progress:
-                                self.hass.loop.call_soon_threadsafe(on_progress, bytes_received)
+                                now_cb = time.monotonic()
+                                if now_cb - last_cb_time >= 1.0:
+                                    last_cb_time = now_cb
+                                    try:
+                                        self.hass.loop.call_soon_threadsafe(on_progress, bytes_received)
+                                    except Exception:
+                                        try:
+                                            on_progress(bytes_received)
+                                        except Exception:
+                                            pass
 
-                        ftp.retrbinary(f"RETR {filename}", _callback, blocksize=131072)
+                        ftp.retrbinary(f"RETR {filename}", _callback, blocksize=524288)
+
+                    if on_progress:
+                        try:
+                            self.hass.loop.call_soon_threadsafe(on_progress, bytes_received)
+                        except Exception:
+                            try:
+                                on_progress(bytes_received)
+                            except Exception:
+                                pass
                     return True
                 finally:
                     if ftp:
