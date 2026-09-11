@@ -618,7 +618,7 @@ class DomoLinkStorageEngine:
 
         try:
             if proto in (PROTO_FTP, PROTO_FTPS):
-                success = await self._async_upload_ftp(file_path, filename, on_progress)
+                success = await self._async_upload_ftp(file_path, filename, size, on_progress)
             elif proto == PROTO_WEBDAV:
                 success = await self._async_upload_webdav(file_path, filename, size, on_progress)
             elif proto == PROTO_GOOGLE_DRIVE:
@@ -641,7 +641,7 @@ class DomoLinkStorageEngine:
                     pass
 
     # ─── FTP Upload ───
-    async def _async_upload_ftp(self, file_path: str, filename: str, on_progress: Callable[[int], None] | None) -> bool:
+    async def _async_upload_ftp(self, file_path: str, filename: str, size: int = 0, on_progress: Callable[[int], None] | None = None) -> bool:
         """Upload file via FTP / FTPS with progress callback."""
         cfg = self.config
         host = cfg.get(CONF_FTP_HOST, "")
@@ -657,6 +657,7 @@ class DomoLinkStorageEngine:
                 ftp = _get_ftp_connection(host, port, user, passwd, use_tls, timeout=120)
                 _ftp_ensure_dir(ftp, path)
 
+                file_size = size or (os.path.getsize(file_path) if os.path.exists(file_path) else 0)
                 total_sent = 0
                 last_cb_time = 0.0
 
@@ -665,7 +666,7 @@ class DomoLinkStorageEngine:
                     total_sent += len(chunk)
                     if on_progress:
                         now_cb = time.monotonic()
-                        if now_cb - last_cb_time >= 1.0 or total_sent >= size:
+                        if now_cb - last_cb_time >= 1.0 or (file_size > 0 and total_sent >= file_size):
                             last_cb_time = now_cb
                             try:
                                 self.hass.loop.call_soon_threadsafe(on_progress, total_sent)
@@ -680,10 +681,10 @@ class DomoLinkStorageEngine:
 
                 if on_progress:
                     try:
-                        self.hass.loop.call_soon_threadsafe(on_progress, size)
+                        self.hass.loop.call_soon_threadsafe(on_progress, file_size or total_sent)
                     except Exception:
                         try:
-                            on_progress(size)
+                            on_progress(file_size or total_sent)
                         except Exception:
                             pass
 

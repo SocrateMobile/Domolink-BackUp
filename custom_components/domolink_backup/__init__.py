@@ -12,12 +12,14 @@ import glob
 import json
 import logging
 import os
+import shutil
 import tarfile
 import time
 from typing import Any
 
 import aiohttp
 
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.components import frontend
 try:
     from homeassistant.components.http import StaticPathConfig
@@ -1756,6 +1758,12 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "Le système Supervisor est actuellement verrouillé ('freeze'). "
                     "Une sauvegarde ou une mise à jour est déjà en cours dans Home Assistant. "
                     "Veuillez patienter ou redémarrer le Supervisor si le blocage persiste."
+                )
+            elif "an error occurred while making backup" in err_str.lower() or "supervisorbadrequesterror" in err_str.lower():
+                user_msg = (
+                    "Une erreur est survenue lors de la création de l'archive par le Supervisor "
+                    "(tâche concurrente, module complémentaire verrouillé ou espace disque insuffisant). "
+                    "Vérifiez l'état de vos modules et l'espace disque de Home Assistant."
                 )
             _LOGGER.exception("DomoLink-BackUp: Erreur pendant la sauvegarde: %s", user_msg)
             self.set_status(STATE_ERROR, f"Erreur : {user_msg}", is_busy=False, error=user_msg)
