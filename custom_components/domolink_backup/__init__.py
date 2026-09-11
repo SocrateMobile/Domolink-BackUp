@@ -1630,33 +1630,19 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 sent_mb = round(bytes_sent / (1024 * 1024), 1)
                 eta_fmt = _format_eta(eta_sec)
 
-                if now_mono - last_progress_log >= 1.5 or bytes_sent >= file_size:
-                    last_progress_log = now_mono
-                    self.update_progress(
-                        STAGE_UPLOADING,
-                        pct,
-                        "Téléversement distant",
-                        f"{sent_mb} Mo / {size_mb} Mo ({pct}%) • {speed_mb_sec} Mo/s",
-                        current_file=remote_filename,
-                        transferred_bytes=bytes_sent,
-                        total_bytes=file_size,
-                        speed_kbps=round(speed_bytes_sec / 1024, 1),
-                        eta_seconds=eta_sec,
-                        log_msg=f"Téléversement : {sent_mb} Mo / {size_mb} Mo ({pct}%) - {speed_mb_sec} Mo/s (ETA: {eta_fmt})",
-                        log_tag="upload_progress",
-                    )
-                else:
-                    self.update_progress(
-                        STAGE_UPLOADING,
-                        pct,
-                        "Téléversement distant",
-                        f"{sent_mb} Mo / {size_mb} Mo ({pct}%) • {speed_mb_sec} Mo/s",
-                        current_file=remote_filename,
-                        transferred_bytes=bytes_sent,
-                        total_bytes=file_size,
-                        speed_kbps=round(speed_bytes_sec / 1024, 1),
-                        eta_seconds=eta_sec,
-                    )
+                self.update_progress(
+                    STAGE_UPLOADING,
+                    pct,
+                    "Téléversement distant",
+                    f"{sent_mb} Mo / {size_mb} Mo ({pct}%) • {speed_mb_sec} Mo/s",
+                    current_file=remote_filename,
+                    transferred_bytes=bytes_sent,
+                    total_bytes=file_size,
+                    speed_kbps=round(speed_bytes_sec / 1024, 1),
+                    eta_seconds=eta_sec,
+                    log_msg=f"Téléversement : {sent_mb} Mo / {size_mb} Mo ({pct}%) - {speed_mb_sec} Mo/s (ETA: {eta_fmt})",
+                    log_tag="upload_progress",
+                )
 
             upload_success = await self.storage_engine.async_upload(
                 source=tar_path,
