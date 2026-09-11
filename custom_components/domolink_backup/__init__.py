@@ -225,48 +225,79 @@ def _sync_find_recent_backup(candidate_dirs: list[str], max_age_seconds: int = 6
     return None
 
 
-SKIP_SCAN_DIR_NAMES = {
-    "proc", "sys", "dev", "run", "etc", "lib", "lib64", "bin", "sbin",
-    "lost+found", ".git", "node_modules", "__pycache__", ".venv", ".cache",
-    "tmp", "cache",
+SKIP_SCAN_EXACT_NAMES = {
+    "proc", "sys", "dev", "run", "lost+found",
+    "bin", "sbin", "lib", "lib64", "lib32", "libx32",
+    "__pycache__", ".git", "node_modules", ".venv", ".cache",
+    ".cargo", ".rustup", ".npm", ".yarn", ".gradle", ".local",
 }
+
+SKIP_SCAN_PATH_PREFIXES = (
+    "usr/lib", "usr/share/doc", "usr/share/man", "usr/share/locale",
+    "usr/share/zoneinfo", "usr/include", "var/cache/apt", "var/lib/apt",
+)
+
+
+def _sync_get_all_system_mount_points() -> list[str]:
+    """Inspect /proc/mounts and /etc/mtab to discover mounted partitions and external storage."""
+    mounts: list[str] = []
+    for mfile in ("/proc/mounts", "/etc/mtab"):
+        if os.path.isfile(mfile):
+            try:
+                with open(mfile, "r", encoding="utf-8", errors="ignore") as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) >= 2:
+                            mp = parts[1]
+                            if mp and os.path.isdir(mp):
+                                if not any(mp.startswith(p) for p in ("/proc", "/sys", "/dev", "/run")):
+                                    if mp not in mounts:
+                                        mounts.append(mp)
+                if mounts:
+                    break
+            except Exception:
+                pass
+    return mounts
 
 
 def _sync_scan_local_disk_for_backups(
     hass_config_dir: str | None = None,
     extra_roots: list[str] | None = None,
-    max_depth: int = 4,
-    timeout_sec: float = 12.0,
+    max_depth: int = 8,
+    timeout_sec: float = 25.0,
 ) -> dict[str, Any]:
-    """Scan local filesystem to find directories containing Home Assistant backup archives."""
+    """Scan local filesystem across Docker, Raspberry Pi, host filesystem and all mounts for backup archives."""
     start = time.monotonic()
     deadline = start + timeout_sec
     scanned_count = 0
     found_dirs: dict[str, dict[str, Any]] = {}
 
-    search_roots = [
+    # High-probability candidates checked instantly in Pass 1
+    priority_candidates = [
         "/backup",
         "/backups",
-        "/mnt",
-        "/share",
-        "/media",
-        "/data",
-        "/root",
-        "/home",
-        "/var",
+        "/usr/share/hassio/backup",
+        "/mnt/data/supervisor/backup",
+        "/mnt/data/backup",
+        "/data/backup",
+        "/data/backups",
+        "/share/backup",
+        "/share/backups",
+        "/media/backup",
+        "/media/backups",
+        "/homeassistant/backups",
+        "/homeassistant/backup",
     ]
     if hass_config_dir:
-        search_roots.insert(2, hass_config_dir)
-        backups_sub = os.path.join(hass_config_dir, "backups")
-        if os.path.isdir(backups_sub):
-            search_roots.insert(0, backups_sub)
+        priority_candidates.insert(0, os.path.join(hass_config_dir, "backups"))
+        priority_candidates.insert(1, os.path.join(hass_config_dir, "backup"))
     if extra_roots:
         for er in extra_roots:
-            if er and er not in search_roots:
-                search_roots.insert(0, er)
+            if er and er not in priority_candidates:
+                priority_candidates.insert(0, er)
 
-    # First pass: check explicit candidate directories directly (instant)
-    for direct in list(search_roots):
+    # Pass 1: check direct candidate directories (instant < 0.05s)
+    for direct in list(priority_candidates):
         if not os.path.isdir(direct):
             continue
         scanned_count += 1
@@ -282,12 +313,21 @@ def _sync_scan_local_disk_for_backups(
             for tf in tar_files:
                 try:
                     st = os.stat(tf)
-                    valid_backups.append((tf, st.st_size, st.st_mtime))
+                    if st.st_size > 500:
+                        valid_backups.append((tf, st.st_size, st.st_mtime))
                 except OSError:
                     continue
             if valid_backups:
                 valid_backups.sort(key=lambda x: x[2], reverse=True)
                 newest = valid_backups[0]
+                category = "Système / Docker"
+                if "supervisor" in direct or direct == "/backup":
+                    category = "Supervisor"
+                elif "config" in direct or "homeassistant" in direct:
+                    category = "Home Assistant Core"
+                elif direct.startswith(("/mnt", "/media", "/share")):
+                    category = "Montage externe"
+
                 found_dirs[direct] = {
                     "path": direct,
                     "count": len(valid_backups),
@@ -295,10 +335,21 @@ def _sync_scan_local_disk_for_backups(
                     "latest_size_mb": round(newest[1] / (1024 * 1024), 2),
                     "latest_mtime": newest[2],
                     "latest_date": datetime.fromtimestamp(newest[2], tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                    "category": category,
                 }
 
-    # Second pass: recursive search on roots
-    for root in search_roots:
+    # Pass 2: exhaustive deep sweep across root "/" and all system mounts
+    mount_points = _sync_get_all_system_mount_points()
+    system_roots = ["/"]
+    for mp in mount_points:
+        if mp not in system_roots and mp not in found_dirs:
+            system_roots.append(mp)
+    # Common Raspberry Pi / Docker partitions
+    for common_root in ("/mnt", "/media", "/share", "/data", "/home", "/opt", "/srv", "/var"):
+        if os.path.isdir(common_root) and common_root not in system_roots:
+            system_roots.append(common_root)
+
+    for root in system_roots:
         if time.monotonic() > deadline:
             break
         if not os.path.isdir(root):
@@ -314,10 +365,19 @@ def _sync_scan_local_disk_for_backups(
                 dirnames.clear()
                 continue
 
-            dirnames[:] = [
-                d for d in dirnames
-                if d.lower() not in SKIP_SCAN_DIR_NAMES and not d.startswith(".")
-            ]
+            filtered_dirs = []
+            for d in dirnames:
+                if d.startswith("."):
+                    continue
+                d_lower = d.lower()
+                if d_lower in SKIP_SCAN_EXACT_NAMES:
+                    continue
+                full_sub = os.path.join(dirpath, d)
+                rel = full_sub.lstrip(os.sep)
+                if any(rel.startswith(pfx) for pfx in SKIP_SCAN_PATH_PREFIXES):
+                    continue
+                filtered_dirs.append(d)
+            dirnames[:] = filtered_dirs
 
             tar_files = [
                 os.path.join(dirpath, f) for f in filenames
@@ -330,12 +390,21 @@ def _sync_scan_local_disk_for_backups(
             for tf in tar_files:
                 try:
                     st = os.stat(tf)
-                    valid_backups.append((tf, st.st_size, st.st_mtime))
+                    if st.st_size > 500:
+                        valid_backups.append((tf, st.st_size, st.st_mtime))
                 except OSError:
                     continue
             if valid_backups:
                 valid_backups.sort(key=lambda x: x[2], reverse=True)
                 newest = valid_backups[0]
+                category = "Système / Docker"
+                if "supervisor" in dirpath or dirpath == "/backup":
+                    category = "Supervisor"
+                elif "config" in dirpath or "homeassistant" in dirpath:
+                    category = "Home Assistant Core"
+                elif dirpath.startswith(("/mnt", "/media", "/share")):
+                    category = "Montage externe"
+
                 found_dirs[dirpath] = {
                     "path": dirpath,
                     "count": len(valid_backups),
@@ -343,6 +412,7 @@ def _sync_scan_local_disk_for_backups(
                     "latest_size_mb": round(newest[1] / (1024 * 1024), 2),
                     "latest_mtime": newest[2],
                     "latest_date": datetime.fromtimestamp(newest[2], tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+                    "category": category,
                 }
 
     results = sorted(found_dirs.values(), key=lambda x: x["latest_mtime"], reverse=True)
@@ -354,23 +424,95 @@ def _sync_scan_local_disk_for_backups(
     }
 
 
-def _sync_find_any_newest_backup_on_disk(
+def _sync_find_targeted_or_newest_backup_on_disk(
     hass_config_dir: str | None = None,
+    target_slug: str | None = None,
     max_age_seconds: int = 900,
 ) -> tuple[str, str, int] | None:
-    """Fast search for any newly created backup archive on the system within max_age_seconds."""
-    scan_res = _sync_scan_local_disk_for_backups(hass_config_dir=hass_config_dir, timeout_sec=8.0)
+    """Fast search for a specific slug or the newest created backup on disk."""
+    scan_res = _sync_scan_local_disk_for_backups(hass_config_dir=hass_config_dir, timeout_sec=14.0)
     now = time.time()
+
+    # 1. If target slug is provided, look for exact match first
+    if target_slug:
+        slug_lower = target_slug.lower()
+        for d in scan_res.get("results", []):
+            dir_p = d["path"]
+            try:
+                for f in os.listdir(dir_p):
+                    if slug_lower in f.lower() and f.lower().endswith((".tar", ".tar.gz", ".tgz")):
+                        full_p = os.path.join(dir_p, f)
+                        sz = os.path.getsize(full_p)
+                        if sz > 500:
+                            return dir_p, full_p, sz
+            except OSError:
+                continue
+
+    # 2. Fallback to newest modified archive within max_age_seconds
     for d in scan_res.get("results", []):
         mtime = d.get("latest_mtime", 0)
         if (now - mtime) <= max_age_seconds:
             full_p = os.path.join(d["path"], d["latest_backup"])
             try:
                 sz = os.path.getsize(full_p)
-                return d["path"], full_p, sz
+                if sz > 500:
+                    return d["path"], full_p, sz
             except OSError:
                 continue
     return None
+
+
+async def async_get_ha_backup_info(hass: HomeAssistant) -> dict[str, Any]:
+    """Query Supervisor and BackupManager for known backup metadata and environment type."""
+    info: dict[str, Any] = {
+        "supervisor_available": False,
+        "supervisor_backups": [],
+        "manager_backups": [],
+        "known_slugs": set(),
+        "environment": "Core / Docker",
+    }
+
+    # 1. Check Supervisor API
+    if "hassio" in hass.config.components:
+        info["supervisor_available"] = True
+        info["environment"] = "Home Assistant OS / Supervised"
+        try:
+            from homeassistant.components.hassio import async_send_command
+            res = await async_send_command(hass, "/backups", method="get")
+            if res and isinstance(res, dict) and "data" in res and "backups" in res["data"]:
+                for b in res["data"]["backups"]:
+                    slug = b.get("slug")
+                    if slug:
+                        info["known_slugs"].add(str(slug).lower())
+                        info["supervisor_backups"].append({
+                            "slug": slug,
+                            "name": b.get("name", ""),
+                            "date": b.get("date", ""),
+                            "size": b.get("size", 0),
+                            "type": b.get("type", "full"),
+                            "location": b.get("location"),
+                        })
+        except Exception as err:
+            _LOGGER.debug("DomoLink-BackUp: Impossible d'interroger l'API Supervisor: %s", err)
+
+    # 2. Check Core BackupManager
+    try:
+        from homeassistant.components.backup.const import DATA_MANAGER
+        manager = hass.data.get(DATA_MANAGER) or hass.data.get("backup")
+        if manager and hasattr(manager, "async_get_backups"):
+            mgr_backups, _ = await manager.async_get_backups()
+            for b_id, b_obj in mgr_backups.items():
+                info["known_slugs"].add(str(b_id).lower())
+                info["manager_backups"].append({
+                    "slug": b_id,
+                    "name": getattr(b_obj, "name", ""),
+                    "date": getattr(b_obj, "date", ""),
+                    "size": getattr(b_obj, "size", 0),
+                })
+    except Exception as err:
+        _LOGGER.debug("DomoLink-BackUp: Impossible d'interroger BackupManager: %s", err)
+
+    return info
 
 
 class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -559,10 +701,13 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if configured_path and os.path.isdir(configured_path):
             candidates.append(configured_path)
 
-        # 2. Standard directories
+        # 2. Standard directories across all HA installation modes
         standard_candidates = [
             "/backup",
             "/backups",
+            "/usr/share/hassio/backup",
+            "/homeassistant/backups",
+            "/homeassistant/backup",
             self.hass.config.path("backups"),
             self.hass.config.path("backup"),
             "/share/backup",
@@ -573,10 +718,20 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "/mnt/data/backup",
             "/data/backup",
             "/data/backups",
+            "/var/lib/docker/volumes",
         ]
         candidates.extend(standard_candidates)
 
-        # 3. Mount points exploration (/mnt, /media, /share)
+        # 3. Mount points exploration (/mnt, /media, /share and system mounts)
+        system_mounts = _sync_get_all_system_mount_points()
+        for sm in system_mounts:
+            if sm not in candidates:
+                candidates.append(sm)
+                for sub in ("backup", "backups"):
+                    sub_p = os.path.join(sm, sub)
+                    if os.path.isdir(sub_p):
+                        candidates.append(sub_p)
+
         for mount_root in ("/mnt", "/media", "/share"):
             try:
                 if os.path.isdir(mount_root):
@@ -843,6 +998,40 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     except Exception:
                         pass
 
+                # Check if Supervisor API reports the finished backup
+                if not detected_slug and "hassio" in self.hass.config.components and poll_count % 2 == 0:
+                    try:
+                        from homeassistant.components.hassio import async_send_command
+                        s_res = await async_send_command(self.hass, "/backups", method="get")
+                        if s_res and isinstance(s_res, dict) and "data" in s_res and "backups" in s_res["data"]:
+                            for sb in s_res["data"]["backups"]:
+                                sb_slug = sb.get("slug")
+                                sb_date = sb.get("date", "")
+                                try:
+                                    dt = datetime.fromisoformat(sb_date.replace("Z", "+00:00"))
+                                    if dt.timestamp() >= started_epoch - 45.0 and sb_slug:
+                                        detected_slug = sb_slug
+                                        sb_sz = sb.get("size", 0)
+                                        sb_mb = round(sb_sz / (1024 * 1024), 1)
+                                        self.update_progress(
+                                            STAGE_CREATING_LOCAL,
+                                            35,
+                                            "Archive identifiée (Supervisor)",
+                                            f"Slug : {detected_slug} ({sb_mb} Mo)",
+                                            log_msg=f"📦 [Supervisor] Sauvegarde enregistrée : {detected_slug} ({sb_mb} Mo)",
+                                        )
+                                        break
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+
+                # Dynamically append newly created directories if any
+                fresh_candidates = self._get_candidate_backup_dirs()
+                for fc in fresh_candidates:
+                    if fc not in existing_dirs and os.path.isdir(fc):
+                        existing_dirs.append(fc)
+
                 # Poll filesystem
                 status, candidate, cand_size = await self.hass.async_add_executor_job(
                     _sync_poll_new_backup_archive,
@@ -868,10 +1057,11 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                 else:
                     # Active periodic disk scan if candidate dirs haven't yielded anything yet
-                    if poll_count >= 5 and poll_count % 3 == 0:
+                    if poll_count >= 3 and poll_count % 2 == 0:
                         disk_found = await self.hass.async_add_executor_job(
-                            _sync_find_any_newest_backup_on_disk,
+                            _sync_find_targeted_or_newest_backup_on_disk,
                             self.hass.config.config_dir,
+                            detected_slug,
                             900,
                         )
                         if disk_found:
@@ -920,10 +1110,11 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     file_size = await self.hass.async_add_executor_job(os.path.getsize, new_file)
 
             if not new_file:
-                # Fallback 2: deep disk search across entire system for newest backup
+                # Fallback 2: deep disk search across entire system for target slug or newest backup
                 disk_found = await self.hass.async_add_executor_job(
-                    _sync_find_any_newest_backup_on_disk,
+                    _sync_find_targeted_or_newest_backup_on_disk,
                     self.hass.config.config_dir,
+                    detected_slug,
                     900,
                 )
                 if disk_found:
@@ -936,6 +1127,44 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         f"{new_file}",
                         log_msg=f"✓ Archive localisée par scan système : {new_file}",
                     )
+
+            if not new_file and detected_slug and "hassio" in self.hass.config.components:
+                # Fallback 3: direct download stream from Supervisor API
+                try:
+                    self.update_progress(
+                        STAGE_CREATING_LOCAL,
+                        45,
+                        "Téléchargement depuis Supervisor",
+                        f"Récupération de l'archive {detected_slug}...",
+                        log_msg=f"Flux direct : récupération de l'archive '{detected_slug}' via l'API Supervisor...",
+                    )
+                    from homeassistant.helpers.aiohttp_client import async_get_clientsession
+                    session = async_get_clientsession(self.hass)
+                    token = os.environ.get("SUPERVISOR_TOKEN", "")
+                    target_dl_dir = self.hass.config.path("backups")
+                    await self.hass.async_add_executor_job(os.makedirs, target_dl_dir, True)
+                    dl_tar_path = os.path.join(target_dl_dir, f"{detected_slug}.tar")
+                    headers = {"Authorization": f"Bearer {token}"} if token else {}
+                    async with session.get(f"http://supervisor/backups/{detected_slug}/download", headers=headers, timeout=aiohttp.ClientTimeout(total=300)) as resp:
+                        if resp.status == 200:
+                            with open(dl_tar_path, "wb") as f_out:
+                                while True:
+                                    chunk = await resp.content.read(65536)
+                                    if not chunk:
+                                        break
+                                    f_out.write(chunk)
+                            new_file = dl_tar_path
+                            file_size = os.path.getsize(dl_tar_path)
+                            self.data["local_backup_path"] = target_dl_dir
+                            self.update_progress(
+                                STAGE_CREATING_LOCAL,
+                                48,
+                                "Archive récupérée",
+                                f"{round(file_size / (1024*1024), 2)} Mo",
+                                log_msg=f"✓ Archive récupérée avec succès depuis Supervisor ({round(file_size / (1024*1024), 2)} Mo)",
+                            )
+                except Exception as dl_err:
+                    _LOGGER.warning("DomoLink-BackUp: Échec téléchargement direct Supervisor: %s", dl_err)
 
             if not new_file:
                 raise FileNotFoundError(
@@ -1496,22 +1725,36 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
             connection.send_error(msg["id"], "not_found", "Coordinateur non disponible")
             return
         extra_roots = msg.get("extra_roots")
+
+        # 1. Query Home Assistant Supervisor and Core BackupManager
+        ha_info = await async_get_ha_backup_info(hass)
+        known_slugs = ha_info.get("known_slugs", set())
+
+        # 2. Perform deep disk scan across root "/" and all system mounts
         scan_res = await hass.async_add_executor_job(
             _sync_scan_local_disk_for_backups,
             hass.config.config_dir,
             extra_roots,
         )
         current_path = coordinator.data.get("local_backup_path", "")
-        for item in scan_res.get("results", []):
+        results = scan_res.get("results", [])
+        for item in results:
             item["is_current"] = (item["path"] == current_path)
+            fname_lower = item.get("latest_backup", "").lower()
+            if any(slug in fname_lower for slug in known_slugs):
+                item["ha_verified"] = True
+
         connection.send_result(
             msg["id"],
             {
                 "success": True,
-                "results": scan_res.get("results", []),
+                "results": results,
                 "scanned_count": scan_res.get("scanned_count", 0),
                 "elapsed_sec": scan_res.get("elapsed_sec", 0.0),
                 "current_path": current_path,
+                "environment": ha_info.get("environment", "Core / Docker"),
+                "ha_backups_count": len(ha_info.get("supervisor_backups", [])) or len(ha_info.get("manager_backups", [])),
+                "supervisor_available": ha_info.get("supervisor_available", False),
             },
         )
 

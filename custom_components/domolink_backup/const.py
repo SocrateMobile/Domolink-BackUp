@@ -6,7 +6,7 @@ import re
 DOMAIN = "domolink_backup"
 NAME = "DomoLink-BackUp"
 DEFAULT_NAME = "DomoLink-BackUp"
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 
 # Storage key for persistent state
 STORAGE_KEY = "domolink_backup_data"

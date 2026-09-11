@@ -242,6 +242,9 @@ class DomoLinkBackupPanel extends HTMLElement {
         this._scanMeta = {
           scanned_count: res.scanned_count || 0,
           elapsed_sec: res.elapsed_sec || 0,
+          environment: res.environment || "Système / Docker",
+          ha_backups_count: res.ha_backups_count || 0,
+          supervisor_available: res.supervisor_available || false,
         };
       } else {
         alert("Le scan n'a pas retourné de résultats.");
@@ -1287,35 +1290,35 @@ class DomoLinkBackupPanel extends HTMLElement {
         <!-- TAB 3: CONFIGURATION, SCAN LOCAL DISK & TEMPLATE -->
         ${this._activeTab === 'config' ? `
           <!-- SCAN LOCAL DISK & BACKUP DIRECTORY CARD -->
+          <!-- LOCAL BACKUP DIRECTORY SCANNER & CONFIGURATION CARD -->
           <div class="card">
             <div class="card-header">
-              <h2 class="card-title">🔍 Emplacement local des sauvegardes Home Assistant</h2>
+              <h2 class="card-title">🔍 Emplacement local des sauvegardes (Disque complet / Docker / Raspberry Pi)</h2>
               ${this._localPathSavedNotice ? `
                 <span style="color: #34d399; font-weight: 600; font-size: 13px;">${this._localPathSavedNotice}</span>
               ` : ''}
             </div>
             <p style="font-size: 13px; color: #94a3b8; margin-bottom: 14px;">
-              DomoLink-BackUp recherche les archives <code>.tar</code> créées par Home Assistant pour les téléverser sur votre serveur distant. 
-              Si vos sauvegardes se situent sur une partition spécifique (ex: partition Supervisor, montage externe <code>/mnt</code>, montage réseau ou clé USB), 
-              vous pouvez renseigner le dossier exact ou lancer un <b>scan automatique de la machine</b>.
+              DomoLink-BackUp recherche les archives <code>.tar</code> créées par Home Assistant pour les téléverser sur votre serveur distant.<br>
+              Le bouton <b>« Scanner tout le disque »</b> inspecte l'intégralité du stockage de votre machine (conteneur Docker, hôte Raspberry Pi, dossiers système <code>/usr/share/hassio/backup</code>, volumes Docker <code>/var/lib/docker</code>, et tous les disques/clés USB montés dans <code>/mnt</code>, <code>/media</code>, <code>/share</code>).
             </p>
 
             <div class="form-group">
               <label class="form-label" for="input-local-path">Dossier local de sauvegarde :</label>
               <div style="display: flex; gap: 10px; align-items: center;">
-                <input type="text" id="input-local-path" class="text-input" value="${configuredLocalPath}" placeholder="ex: /backup ou /mnt/data/supervisor/backup (vide = auto)">
+                <input type="text" id="input-local-path" class="text-input" value="${configuredLocalPath}" placeholder="ex: /backup ou /usr/share/hassio/backup (vide = auto)">
                 <button class="btn btn-primary" id="btn-save-local-path" style="white-space: nowrap;">
                   💾 Enregistrer
                 </button>
               </div>
               <div style="font-size: 12px; color: #64748b; margin-top: 6px;">
-                État actuel : ${configuredLocalPath ? `<b style="color: #38bdf8;">Dossier personnalisé (${configuredLocalPath})</b>` : `<span style="color: #34d399;">✓ Auto-détection active (/backup, /mnt, /share, ...)</span>`}
+                État actuel : ${configuredLocalPath ? `<b style="color: #38bdf8;">Dossier personnalisé (${configuredLocalPath})</b>` : `<span style="color: #34d399;">✓ Auto-détection active sur tout le système (/backup, /usr/share/hassio, /mnt, ...)</span>`}
               </div>
             </div>
 
             <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px;">
               <button class="btn btn-secondary" id="btn-scan-local" ${this._isScanningLocal ? 'disabled' : ''}>
-                ${this._isScanningLocal ? '<span class="spinner"></span> Analyse en cours...' : '🔍 Scanner le disque pour trouver le chemin'}
+                ${this._isScanningLocal ? '<span class="spinner"></span> Balayage du disque en cours...' : '🔍 Scanner tout le disque de la machine'}
               </button>
               <button class="btn btn-secondary" id="btn-clear-local-path">
                 ↺ Rétablir l'auto-détection
@@ -1326,25 +1329,41 @@ class DomoLinkBackupPanel extends HTMLElement {
             ${this._isScanningLocal ? `
               <div style="margin-top: 16px; padding: 16px; background: rgba(0,0,0,0.3); border-radius: 10px; border: 1px dashed rgba(59,130,246,0.4); text-align: center;">
                 <div class="spinner" style="margin-bottom: 8px;"></div>
-                <div style="font-size: 13px; color: #60a5fa; font-weight: 600;">Balayage du disque en cours...</div>
-                <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Recherche des archives .tar dans /backup, /mnt, /share, /media, /data, /root...</div>
+                <div style="font-size: 13px; color: #60a5fa; font-weight: 600;">Balayage complet du disque de l'installation (Docker & Raspberry Pi)...</div>
+                <div style="font-size: 12px; color: #94a3b8; margin-top: 4px;">Analyse de la racine /, de l'hôte, des volumes Docker et des montages système...</div>
               </div>
             ` : ''}
 
             ${this._scanResults ? `
               <div class="scan-results-box">
-                <div style="padding: 12px 16px; background: rgba(255,255,255,0.04); font-size: 12px; font-weight: 600; color: #cbd5e1; display: flex; justify-content: space-between;">
+                <div style="padding: 12px 16px; background: rgba(255,255,255,0.04); font-size: 12px; font-weight: 600; color: #cbd5e1; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
                   <span>Dossiers trouvés (${this._scanResults.length})</span>
-                  <span style="color: #64748b;">${this._scanMeta ? `${this._scanMeta.scanned_count} répertoires analysés en ${this._scanMeta.elapsed_sec}s` : ''}</span>
+                  <span style="color: #94a3b8; font-size: 11px;">
+                    ${this._scanMeta ? `${this._scanMeta.environment} • ${this._scanMeta.scanned_count} répertoires analysés en ${this._scanMeta.elapsed_sec}s` : ''}
+                  </span>
                 </div>
                 ${this._scanResults.length === 0 ? `
                   <div style="padding: 20px; text-align: center; color: #fbbf24; font-size: 13px;">
-                    ⚠️ Aucune archive de sauvegarde .tar trouvée lors du balayage des répertoires standards.
+                    ⚠️ Aucune archive de sauvegarde .tar trouvée lors du balayage du disque.
                   </div>
                 ` : this._scanResults.map(r => `
                   <div class="scan-item">
                     <div style="flex: 1;">
-                      <div class="scan-path">${r.path}</div>
+                      <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                        <span class="scan-path">${r.path}</span>
+                        ${r.category ? `
+                          <span style="display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; ${
+                            r.category === 'Supervisor' 
+                              ? 'background: rgba(14, 165, 233, 0.2); color: #38bdf8; border: 1px solid rgba(14, 165, 233, 0.35);' 
+                              : r.category === 'Home Assistant Core' 
+                              ? 'background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.35);' 
+                              : 'background: rgba(245, 158, 11, 0.2); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.35);'
+                          }">${r.category}</span>
+                        ` : ''}
+                        ${r.ha_verified ? `
+                          <span style="display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; background: rgba(16, 185, 129, 0.2); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.35);">✓ Validé HA</span>
+                        ` : ''}
+                      </div>
                       <div class="scan-details">
                         <b>${r.count} archive(s)</b> • Dernière archive : <code>${r.latest_backup}</code> (${r.latest_size_mb} Mo, le ${r.latest_date})
                       </div>
