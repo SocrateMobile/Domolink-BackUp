@@ -590,6 +590,49 @@ def _sync_read_tar_backup_json(tar_path: str) -> dict[str, Any]:
     return {}
 
 
+def _sync_extract_core_subfolders(tar_path: str, target_config_dir: str, subfolders: list[str]) -> list[str]:
+    """Safely extract specific subfolders (custom_components, themes, blueprints) from homeassistant.tar.gz."""
+    extracted = []
+    try:
+        with tarfile.open(tar_path, "r:*") as outer_tar:
+            ha_tar_member = None
+            for name in ("homeassistant.tar.gz", "./homeassistant.tar.gz", "homeassistant.tar", "./homeassistant.tar"):
+                try:
+                    ha_tar_member = outer_tar.getmember(name)
+                    break
+                except KeyError:
+                    continue
+            if not ha_tar_member:
+                _LOGGER.debug("DomoLink-BackUp: homeassistant.tar.gz introuvable dans %s", tar_path)
+                return extracted
+
+            ha_fileobj = outer_tar.extractfile(ha_tar_member)
+            if not ha_fileobj:
+                return extracted
+
+            with tarfile.open(fileobj=ha_fileobj, mode="r:*") as inner_tar:
+                members_to_extract = []
+                for member in inner_tar.getmembers():
+                    clean_name = member.name.lstrip("./")
+                    for sub in subfolders:
+                        if clean_name == sub or clean_name.startswith(f"{sub}/"):
+                            members_to_extract.append(member)
+                            if sub not in extracted:
+                                extracted.append(sub)
+                            break
+                if members_to_extract:
+                    inner_tar.extractall(path=target_config_dir, members=members_to_extract)
+                    _LOGGER.info(
+                        "DomoLink-BackUp: Extraction ciblée de %d fichiers (%s) dans %s",
+                        len(members_to_extract),
+                        ", ".join(extracted),
+                        target_config_dir,
+                    )
+    except Exception as err:
+        _LOGGER.error("DomoLink-BackUp: Erreur extraction ciblée de %s: %s", tar_path, err)
+    return extracted
+
+
 async def async_upload_backup_to_supervisor(hass: HomeAssistant, tar_path: str) -> bool:
     """Upload and register a local .tar backup archive into Home Assistant Supervisor."""
     host, headers = _get_supervisor_auth_headers()
@@ -994,6 +1037,9 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         mode: str = "MANUEL",
         backup_type: str = BACKUP_TYPE_FULL,
         homeassistant: bool = True,
+        include_integrations: bool = True,
+        include_themes: bool = True,
+        include_blueprints: bool = True,
         addons: list[str] | None = None,
         folders: list[str] | None = None,
     ) -> bool:
@@ -1599,6 +1645,9 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         [
                             "Type: Sauvegarde Partielle / Incrémentielle",
                             f"Core HA: {'Inclus' if homeassistant else 'Exclu'}",
+                            f"Intégrations (custom_components): {'Incluses' if include_integrations else 'Exclues'}",
+                            f"Thèmes Lovelace: {'Inclus' if include_themes else 'Exclus'}",
+                            f"Blueprints: {'Inclus' if include_blueprints else 'Exclus'}",
                             "Base de données SQLite / MariaDB" if include_database else "Base de données (exclue)",
                             f"Add-ons: {len(addons) if addons is not None else 'Tous'}",
                             f"Dossiers: {len(folders) if folders is not None else 'Tous'}",
@@ -1607,6 +1656,9 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         else [
                             "Type: Sauvegarde Complète",
                             "Configuration Home Assistant (/config)",
+                            "Intégrations (custom_components)",
+                            "Thèmes d'interface Lovelace",
+                            "Blueprints & Scripts",
                             "Base de données SQLite / MariaDB" if include_database else "Base de données (exclue)",
                             "Tous les modules complémentaires (Add-ons)",
                             "Tous les dossiers partagés (/share, /ssl, /media)",
@@ -1796,6 +1848,9 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         filename: str,
         restore_mode: str = RESTORE_MODE_DOWNLOAD_ONLY,
         restore_homeassistant: bool = True,
+        restore_integrations: bool = True,
+        restore_themes: bool = True,
+        restore_blueprints: bool = True,
         restore_addons: list[str] | None = None,
         restore_folders: list[str] | None = None,
     ) -> bool:
@@ -1988,32 +2043,64 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     95,
                     "Restauration partielle",
                     "Application sélective des composants choisis...",
-                    log_msg=f"⚡ Lancement de la restauration partielle pour l'archive '{backup_display_name}' (slug: {target_slug}, Core: {restore_homeassistant}, Addons: {len(restore_addons or [])}, Dossiers: {len(restore_folders or [])})...",
+                    log_msg=f"⚡ Lancement de la restauration partielle pour l'archive '{backup_display_name}' (Core: {restore_homeassistant}, Intégrations: {restore_integrations}, Thèmes: {restore_themes}, Blueprints: {restore_blueprints}, Addons: {len(restore_addons or [])}, Dossiers: {len(restore_folders or [])})...",
                     level="warning",
                 )
                 await self.notifier.async_notify_start(f"Restauration partielle : {backup_display_name}", "Home Assistant (Système)")
 
-                # Trigger partial restore service
-                if self.hass.services.has_service("hassio", "backup_restore_partial"):
-                    service_data: dict[str, Any] = {
-                        "slug": target_slug,
-                        "homeassistant": bool(restore_homeassistant),
-                    }
-                    if restore_addons is not None:
-                        service_data["addons"] = list(restore_addons)
-                    if restore_folders is not None:
-                        service_data["folders"] = list(restore_folders)
-                    _LOGGER.info("DomoLink-BackUp: Appel hassio.backup_restore_partial: %s", service_data)
-                    await self.hass.services.async_call(
-                        "hassio", "backup_restore_partial", service_data, blocking=False
-                    )
-                elif self.hass.services.has_service("backup", "restore"):
-                    _LOGGER.info("DomoLink-BackUp: Appel backup.restore pour backup_id %s", target_slug)
-                    await self.hass.services.async_call(
-                        "backup", "restore", {"backup_id": target_slug}, blocking=False
-                    )
+                # If user wants full Core restore:
+                if restore_homeassistant:
+                    if self.hass.services.has_service("hassio", "backup_restore_partial"):
+                        service_data: dict[str, Any] = {
+                            "slug": target_slug,
+                            "homeassistant": True,
+                        }
+                        if restore_addons is not None:
+                            service_data["addons"] = list(restore_addons)
+                        if restore_folders is not None:
+                            service_data["folders"] = list(restore_folders)
+                        _LOGGER.info("DomoLink-BackUp: Appel hassio.backup_restore_partial: %s", service_data)
+                        await self.hass.services.async_call(
+                            "hassio", "backup_restore_partial", service_data, blocking=False
+                        )
+                    elif self.hass.services.has_service("backup", "restore"):
+                        _LOGGER.info("DomoLink-BackUp: Appel backup.restore pour backup_id %s", target_slug)
+                        await self.hass.services.async_call(
+                            "backup", "restore", {"backup_id": target_slug}, blocking=False
+                        )
+                    else:
+                        raise RuntimeError("Aucun service de restauration Home Assistant disponible.")
                 else:
-                    raise RuntimeError("Aucun service de restauration Home Assistant disponible.")
+                    # User did not want full Core restore, but may have requested specific subcomponents
+                    subfolders_to_extract = []
+                    if restore_integrations:
+                        subfolders_to_extract.append("custom_components")
+                    if restore_themes:
+                        subfolders_to_extract.append("themes")
+                    if restore_blueprints:
+                        subfolders_to_extract.append("blueprints")
+
+                    if subfolders_to_extract:
+                        config_dir = self.hass.config.config_dir
+                        extracted = await self.hass.async_add_executor_job(
+                            _sync_extract_core_subfolders, local_dest, config_dir, subfolders_to_extract
+                        )
+                        _LOGGER.info("DomoLink-BackUp: Éléments extraits directement dans config: %s", extracted)
+
+                    # Also trigger add-ons or folders restoration if requested
+                    if (restore_addons or restore_folders) and self.hass.services.has_service("hassio", "backup_restore_partial"):
+                        service_data = {
+                            "slug": target_slug,
+                            "homeassistant": False,
+                        }
+                        if restore_addons is not None:
+                            service_data["addons"] = list(restore_addons)
+                        if restore_folders is not None:
+                            service_data["folders"] = list(restore_folders)
+                        _LOGGER.info("DomoLink-BackUp: Appel hassio.backup_restore_partial (addons/folders): %s", service_data)
+                        await self.hass.services.async_call(
+                            "hassio", "backup_restore_partial", service_data, blocking=False
+                        )
 
                 restore_report = {
                     "operation": "Restauration Partielle / Incrémentielle",
@@ -2028,6 +2115,9 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "components": [
                         f"Slug: {target_slug}",
                         f"Home Assistant Core: {'Inclus' if restore_homeassistant else 'Exclu'}",
+                        f"Intégrations (custom_components): {'Restaurées' if (restore_homeassistant or restore_integrations) else 'Exclues'}",
+                        f"Thèmes Lovelace: {'Restaurés' if (restore_homeassistant or restore_themes) else 'Exclus'}",
+                        f"Blueprints: {'Restaurés' if (restore_homeassistant or restore_blueprints) else 'Exclus'}",
                         f"Add-ons restaurés: {len(restore_addons) if restore_addons else '0'}",
                         f"Dossiers restaurés: {len(restore_folders) if restore_folders else '0'}",
                     ],
@@ -2156,6 +2246,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         include_db = call.data.get("include_database", True)
         backup_type = call.data.get("backup_type", BACKUP_TYPE_FULL)
         homeassistant = call.data.get("homeassistant", True)
+        include_integrations = call.data.get("include_integrations", True)
+        include_themes = call.data.get("include_themes", True)
+        include_blueprints = call.data.get("include_blueprints", True)
         addons = call.data.get("addons")
         folders = call.data.get("folders")
         await coordinator.async_create_and_upload_backup(
@@ -2163,6 +2256,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             include_database=include_db,
             backup_type=backup_type,
             homeassistant=homeassistant,
+            include_integrations=include_integrations,
+            include_themes=include_themes,
+            include_blueprints=include_blueprints,
             addons=addons,
             folders=folders,
         )
@@ -2176,6 +2272,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         filename = call.data.get("filename")
         restore_mode = call.data.get("restore_mode", RESTORE_MODE_DOWNLOAD_ONLY)
         restore_homeassistant = call.data.get("restore_homeassistant", True)
+        restore_integrations = call.data.get("restore_integrations", True)
+        restore_themes = call.data.get("restore_themes", True)
+        restore_blueprints = call.data.get("restore_blueprints", True)
         restore_addons = call.data.get("restore_addons")
         restore_folders = call.data.get("restore_folders")
         if filename:
@@ -2183,6 +2282,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 filename=filename,
                 restore_mode=restore_mode,
                 restore_homeassistant=restore_homeassistant,
+                restore_integrations=restore_integrations,
+                restore_themes=restore_themes,
+                restore_blueprints=restore_blueprints,
                 restore_addons=restore_addons,
                 restore_folders=restore_folders,
             )
@@ -2201,6 +2303,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         vol.Optional("include_database", default=True): bool,
         vol.Optional("backup_type", default=BACKUP_TYPE_FULL): vol.In([BACKUP_TYPE_FULL, BACKUP_TYPE_PARTIAL]),
         vol.Optional("homeassistant", default=True): bool,
+        vol.Optional("include_integrations", default=True): bool,
+        vol.Optional("include_themes", default=True): bool,
+        vol.Optional("include_blueprints", default=True): bool,
         vol.Optional("addons"): [str],
         vol.Optional("folders"): [str],
     })
@@ -2213,6 +2318,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             [RESTORE_MODE_DOWNLOAD_ONLY, RESTORE_MODE_FULL, RESTORE_MODE_PARTIAL]
         ),
         vol.Optional("restore_homeassistant", default=True): bool,
+        vol.Optional("restore_integrations", default=True): bool,
+        vol.Optional("restore_themes", default=True): bool,
+        vol.Optional("restore_blueprints", default=True): bool,
         vol.Optional("restore_addons"): [str],
         vol.Optional("restore_folders"): [str],
     })
@@ -2309,6 +2417,9 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         mode = msg.get("mode", "MANUEL")
         backup_type = msg.get("backup_type", BACKUP_TYPE_FULL)
         homeassistant = msg.get("homeassistant", True)
+        include_integrations = msg.get("include_integrations", True)
+        include_themes = msg.get("include_themes", True)
+        include_blueprints = msg.get("include_blueprints", True)
         addons = msg.get("addons")
         folders = msg.get("folders")
         hass.async_create_task(
@@ -2318,6 +2429,9 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
                 mode=mode,
                 backup_type=backup_type,
                 homeassistant=homeassistant,
+                include_integrations=include_integrations,
+                include_themes=include_themes,
+                include_blueprints=include_blueprints,
                 addons=addons,
                 folders=folders,
             ),
@@ -2409,6 +2523,9 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
             [RESTORE_MODE_DOWNLOAD_ONLY, RESTORE_MODE_FULL, RESTORE_MODE_PARTIAL]
         ),
         vol.Optional("restore_homeassistant", default=True): bool,
+        vol.Optional("restore_integrations", default=True): bool,
+        vol.Optional("restore_themes", default=True): bool,
+        vol.Optional("restore_blueprints", default=True): bool,
         vol.Optional("restore_addons"): [str],
         vol.Optional("restore_folders"): [str],
     })
@@ -2421,6 +2538,9 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         filename = msg["filename"]
         restore_mode = msg.get("restore_mode", RESTORE_MODE_DOWNLOAD_ONLY)
         restore_homeassistant = msg.get("restore_homeassistant", True)
+        restore_integrations = msg.get("restore_integrations", True)
+        restore_themes = msg.get("restore_themes", True)
+        restore_blueprints = msg.get("restore_blueprints", True)
         restore_addons = msg.get("restore_addons")
         restore_folders = msg.get("restore_folders")
         hass.async_create_task(
@@ -2428,6 +2548,9 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
                 filename,
                 restore_mode=restore_mode,
                 restore_homeassistant=restore_homeassistant,
+                restore_integrations=restore_integrations,
+                restore_themes=restore_themes,
+                restore_blueprints=restore_blueprints,
                 restore_addons=restore_addons,
                 restore_folders=restore_folders,
             ),

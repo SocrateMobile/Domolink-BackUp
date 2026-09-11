@@ -103,18 +103,26 @@ class DomoLinkBackupPanel extends HTMLElement {
     this._modalBackupName = "";
     this._modalBackupType = "full";
     this._modalIncludeHa = true;
+    this._modalIncludeIntegrations = true;
+    this._modalIncludeThemes = true;
+    this._modalIncludeBlueprints = true;
     this._modalIncludeDb = true;
-    this._modalSelectedAddons = new Set();
-    this._modalSelectedFolders = new Set(["share", "ssl", "media"]);
+    this._modalSelectedAddons = [];
+    this._modalSelectedFolders = ["share", "ssl", "media"];
     this._installedAddons = [];
-    this._availableFolders = [];
+    this._availableFolders = ["share", "ssl", "media", "addons/local"];
 
     this._showRestoreModal = false;
     this._restoreModalBackup = null;
     this._restoreMode = "download_only";
     this._restoreIncludeHa = true;
+    this._restoreIncludeIntegrations = true;
+    this._restoreIncludeThemes = true;
+    this._restoreIncludeBlueprints = true;
     this._restoreIncludeAddons = true;
     this._restoreIncludeFolders = true;
+    this._restoreSelectedAddons = [];
+    this._restoreSelectedFolders = ["share", "ssl", "media"];
 
     this._templateInputVal = "";
     this._templateSavedNotice = "";
@@ -193,9 +201,12 @@ class DomoLinkBackupPanel extends HTMLElement {
   _openBackupModal() {
     this._modalBackupType = "full";
     this._modalIncludeHa = true;
+    this._modalIncludeIntegrations = true;
+    this._modalIncludeThemes = true;
+    this._modalIncludeBlueprints = true;
     this._modalIncludeDb = true;
-    this._modalSelectedAddons = new Set((this._installedAddons || []).map(a => a.slug));
-    this._modalSelectedFolders = new Set((this._availableFolders || []).map(f => f.id));
+    this._modalSelectedAddons = (this._installedAddons || []).map(a => a.slug);
+    this._modalSelectedFolders = [...(this._availableFolders && this._availableFolders.length > 0 ? this._availableFolders : ["share", "ssl", "media"])];
     const currentTpl = this._data.backup_name_template || this._config.backup_name_template || DEFAULT_TEMPLATE;
     this._modalBackupName = evaluateTemplate(currentTpl, "MANUEL");
     this._showBackupModal = true;
@@ -228,8 +239,11 @@ class DomoLinkBackupPanel extends HTMLElement {
       };
       if (backupType === "partial") {
         payload.homeassistant = this._modalIncludeHa;
-        payload.addons = Array.from(this._modalSelectedAddons);
-        payload.folders = Array.from(this._modalSelectedFolders);
+        payload.include_integrations = this._modalIncludeIntegrations;
+        payload.include_themes = this._modalIncludeThemes;
+        payload.include_blueprints = this._modalIncludeBlueprints;
+        payload.addons = this._modalSelectedAddons;
+        payload.folders = this._modalSelectedFolders;
       }
       await this._hass.callWS(payload);
       this._fetchData();
@@ -243,8 +257,13 @@ class DomoLinkBackupPanel extends HTMLElement {
     this._restoreModalBackup = backup;
     this._restoreMode = "download_only";
     this._restoreIncludeHa = true;
+    this._restoreIncludeIntegrations = true;
+    this._restoreIncludeThemes = true;
+    this._restoreIncludeBlueprints = true;
     this._restoreIncludeAddons = true;
     this._restoreIncludeFolders = true;
+    this._restoreSelectedAddons = (this._installedAddons || []).map(a => a.slug);
+    this._restoreSelectedFolders = [...(this._availableFolders && this._availableFolders.length > 0 ? this._availableFolders : ["share", "ssl", "media"])];
     this._showRestoreModal = true;
     this._render();
   }
@@ -273,8 +292,11 @@ class DomoLinkBackupPanel extends HTMLElement {
       };
       if (restoreMode === "partial_restore") {
         payload.restore_homeassistant = this._restoreIncludeHa;
-        payload.restore_addons = this._restoreIncludeAddons ? undefined : [];
-        payload.restore_folders = this._restoreIncludeFolders ? undefined : [];
+        payload.restore_integrations = this._restoreIncludeIntegrations;
+        payload.restore_themes = this._restoreIncludeThemes;
+        payload.restore_blueprints = this._restoreIncludeBlueprints;
+        payload.restore_addons = this._restoreIncludeAddons ? this._restoreSelectedAddons : [];
+        payload.restore_folders = this._restoreIncludeFolders ? this._restoreSelectedFolders : [];
       }
       await this._hass.callWS(payload);
       this._fetchData();
@@ -1016,17 +1038,20 @@ class DomoLinkBackupPanel extends HTMLElement {
           cursor: pointer;
           transition: all 0.2s;
           display: flex;
-          align-items: flex-start;
-          gap: 10px;
+          flex-direction: column;
+          gap: 6px;
+          user-select: none;
         }
 
         .backup-type-card:hover {
           background: rgba(255, 255, 255, 0.06);
+          border-color: rgba(255, 255, 255, 0.2);
         }
 
         .backup-type-card.active {
           background: rgba(59, 130, 246, 0.15);
           border-color: #3b82f6;
+          box-shadow: 0 0 0 1px #3b82f6;
         }
 
         .components-box {
@@ -1691,17 +1716,34 @@ class DomoLinkBackupPanel extends HTMLElement {
                     <span>🧩 Sélection des composants à inclure :</span>
                   </div>
 
-                  <!-- CORE & DATABASE -->
+                  <!-- CORE CONFIGURATION & SUBCOMPONENTS -->
                   <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,0.06);">
                     <label class="checkbox-label">
                       <input type="checkbox" id="modal-check-ha" ${this._modalIncludeHa ? 'checked' : ''}>
-                      <span style="font-weight: 600; color: #f8fafc;">🏠 Configuration Home Assistant Core (YAML, automations, scènes)</span>
+                      <span style="font-weight: 700; color: #f8fafc;">🏠 Configuration Home Assistant Core (YAML, automatisations, scènes)</span>
                     </label>
 
-                    <label class="checkbox-label" style="margin-left: 24px;">
-                      <input type="checkbox" id="modal-check-db" ${this._modalIncludeDb ? 'checked' : ''}>
-                      <span style="color: #94a3b8; font-size: 12px;">🗄️ Inclure la base de données historique (recommandé de décocher pour accélérer)</span>
-                    </label>
+                    <div style="display: flex; flex-direction: column; gap: 6px; margin-left: 24px;">
+                      <label class="checkbox-label" style="font-size: 12px;">
+                        <input type="checkbox" id="modal-check-integrations" ${this._modalIncludeIntegrations ? 'checked' : ''}>
+                        <span>🔌 Intégrations personnalisées (<code>custom_components</code> & HACS)</span>
+                      </label>
+
+                      <label class="checkbox-label" style="font-size: 12px;">
+                        <input type="checkbox" id="modal-check-themes" ${this._modalIncludeThemes ? 'checked' : ''}>
+                        <span>🎨 Thèmes d'interface Lovelace (<code>themes</code>)</span>
+                      </label>
+
+                      <label class="checkbox-label" style="font-size: 12px;">
+                        <input type="checkbox" id="modal-check-blueprints" ${this._modalIncludeBlueprints ? 'checked' : ''}>
+                        <span>📐 Blueprints & Modèles d'automatisations (<code>blueprints</code>)</span>
+                      </label>
+
+                      <label class="checkbox-label" style="font-size: 12px;">
+                        <input type="checkbox" id="modal-check-db" ${this._modalIncludeDb ? 'checked' : ''}>
+                        <span style="color: #94a3b8;">🗄️ Inclure la base de données historique (décocher pour accélérer grandement)</span>
+                      </label>
+                    </div>
                   </div>
 
                   <!-- ADD-ONS -->
@@ -1813,18 +1855,70 @@ class DomoLinkBackupPanel extends HTMLElement {
 
                     ${this._restoreMode === 'partial_restore' ? `
                       <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.08); display: flex; flex-direction: column; gap: 8px;">
-                        <label class="checkbox-label" style="font-size: 12px;">
+                        <label class="checkbox-label" style="font-size: 13px;">
                           <input type="checkbox" id="restore-check-ha" ${this._restoreIncludeHa ? 'checked' : ''}>
-                          <span>🏠 Configuration Home Assistant Core</span>
+                          <span style="font-weight: 700; color: #f8fafc;">🏠 Configuration Home Assistant Core (YAML, automatisations, scènes)</span>
                         </label>
-                        <label class="checkbox-label" style="font-size: 12px;">
-                          <input type="checkbox" id="restore-check-addons" ${this._restoreIncludeAddons ? 'checked' : ''}>
-                          <span>📦 Modules complémentaires (Add-ons)</span>
-                        </label>
-                        <label class="checkbox-label" style="font-size: 12px;">
-                          <input type="checkbox" id="restore-check-folders" ${this._restoreIncludeFolders ? 'checked' : ''}>
-                          <span>📁 Dossiers partagés (/share, /ssl, /media...)</span>
-                        </label>
+
+                        <div style="display: flex; flex-direction: column; gap: 6px; margin-left: 24px; padding-bottom: 8px; border-bottom: 1px solid rgba(255,255,255,0.05);">
+                          <label class="checkbox-label" style="font-size: 12px;">
+                            <input type="checkbox" id="restore-check-integrations" ${this._restoreIncludeIntegrations ? 'checked' : ''}>
+                            <span>🔌 Intégrations personnalisées (<code>custom_components</code> & HACS)</span>
+                          </label>
+
+                          <label class="checkbox-label" style="font-size: 12px;">
+                            <input type="checkbox" id="restore-check-themes" ${this._restoreIncludeThemes ? 'checked' : ''}>
+                            <span>🎨 Thèmes Lovelace (<code>themes</code>)</span>
+                          </label>
+
+                          <label class="checkbox-label" style="font-size: 12px;">
+                            <input type="checkbox" id="restore-check-blueprints" ${this._restoreIncludeBlueprints ? 'checked' : ''}>
+                            <span>📐 Blueprints & Modèles d'automatisations (<code>blueprints</code>)</span>
+                          </label>
+                        </div>
+
+                        <!-- ADDONS -->
+                        <div>
+                          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+                            <label class="checkbox-label" style="font-size: 12px; font-weight: 600;">
+                              <input type="checkbox" id="restore-check-addons" ${this._restoreIncludeAddons ? 'checked' : ''}>
+                              <span>📦 Modules complémentaires (Add-ons)</span>
+                            </label>
+                            ${this._restoreIncludeAddons && this._installedAddons && this._installedAddons.length > 0 ? `
+                              <button type="button" class="btn btn-secondary" id="btn-toggle-all-restore-addons" style="padding: 2px 8px; font-size: 11px;">
+                                ${this._restoreSelectedAddons.length === this._installedAddons.length ? 'Tout décocher' : 'Tout cocher'}
+                              </button>
+                            ` : ''}
+                          </div>
+                          ${this._restoreIncludeAddons && this._installedAddons && this._installedAddons.length > 0 ? `
+                            <div class="components-scroll" style="margin-left: 20px;">
+                              ${this._installedAddons.map(addon => `
+                                <label class="checkbox-label" style="font-size: 12px;">
+                                  <input type="checkbox" class="restore-addon-checkbox" data-addon="${addon.slug}" ${this._restoreSelectedAddons.includes(addon.slug) ? 'checked' : ''}>
+                                  <span><b>${addon.name}</b> <span style="color: #64748b; font-size: 11px;">(${addon.version || addon.slug})</span></span>
+                                </label>
+                              `).join('')}
+                            </div>
+                          ` : ''}
+                        </div>
+
+                        <!-- FOLDERS -->
+                        <div>
+                          <label class="checkbox-label" style="font-size: 12px; font-weight: 600; margin-bottom: 4px;">
+                            <input type="checkbox" id="restore-check-folders" ${this._restoreIncludeFolders ? 'checked' : ''}>
+                            <span>📁 Dossiers partagés (/share, /ssl, /media...)</span>
+                          </label>
+                          ${this._restoreIncludeFolders ? `
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-left: 20px;">
+                              ${this._availableFolders.map(folder => `
+                                <label class="checkbox-label" style="font-size: 12px;">
+                                  <input type="checkbox" class="restore-folder-checkbox" data-folder="${folder}" ${this._restoreSelectedFolders.includes(folder) ? 'checked' : ''}>
+                                  <code>/${folder}</code>
+                                </label>
+                              `).join('')}
+                            </div>
+                          ` : ''}
+                        </div>
                       </div>
                     ` : ''}
                   </div>
@@ -1984,40 +2078,37 @@ class DomoLinkBackupPanel extends HTMLElement {
     const btnCancelBackup = root.querySelector("#btn-cancel-backup");
     if (btnCancelBackup) btnCancelBackup.onclick = () => this._closeBackupModal();
 
+    const setBackupType = (type) => {
+      this._modalBackupType = type;
+      this._modalBackupName = evaluateTemplate(
+        this._template,
+        type === "partial" ? "PARTIEL" : "MANUEL"
+      );
+      this._render();
+    };
+
     const cardBackupFull = root.querySelector("#card-backup-full");
     if (cardBackupFull) {
-      cardBackupFull.onclick = () => {
-        this._modalBackupType = "full";
-        this._modalBackupName = evaluateTemplate(this._template, "MANUEL");
-        this._render();
+      cardBackupFull.onclick = (e) => {
+        if (e.target.tagName !== "INPUT") setBackupType("full");
       };
     }
 
     const cardBackupPartial = root.querySelector("#card-backup-partial");
     if (cardBackupPartial) {
-      cardBackupPartial.onclick = () => {
-        this._modalBackupType = "partial";
-        this._modalBackupName = evaluateTemplate(this._template, "PARTIEL");
-        this._render();
+      cardBackupPartial.onclick = (e) => {
+        if (e.target.tagName !== "INPUT") setBackupType("partial");
       };
     }
 
     const radioBtypeFull = root.querySelector("#radio-btype-full");
     if (radioBtypeFull) {
-      radioBtypeFull.onchange = () => {
-        this._modalBackupType = "full";
-        this._modalBackupName = evaluateTemplate(this._template, "MANUEL");
-        this._render();
-      };
+      radioBtypeFull.onchange = () => setBackupType("full");
     }
 
     const radioBtypePartial = root.querySelector("#radio-btype-partial");
     if (radioBtypePartial) {
-      radioBtypePartial.onchange = () => {
-        this._modalBackupType = "partial";
-        this._modalBackupName = evaluateTemplate(this._template, "PARTIEL");
-        this._render();
-      };
+      radioBtypePartial.onchange = () => setBackupType("partial");
     }
 
     const modalInput = root.querySelector("#modal-backup-input");
@@ -2031,6 +2122,27 @@ class DomoLinkBackupPanel extends HTMLElement {
     if (modalCheckHa) {
       modalCheckHa.onchange = (e) => {
         this._modalIncludeHa = e.target.checked;
+      };
+    }
+
+    const modalCheckIntegrations = root.querySelector("#modal-check-integrations");
+    if (modalCheckIntegrations) {
+      modalCheckIntegrations.onchange = (e) => {
+        this._modalIncludeIntegrations = e.target.checked;
+      };
+    }
+
+    const modalCheckThemes = root.querySelector("#modal-check-themes");
+    if (modalCheckThemes) {
+      modalCheckThemes.onchange = (e) => {
+        this._modalIncludeThemes = e.target.checked;
+      };
+    }
+
+    const modalCheckBlueprints = root.querySelector("#modal-check-blueprints");
+    if (modalCheckBlueprints) {
+      modalCheckBlueprints.onchange = (e) => {
+        this._modalIncludeBlueprints = e.target.checked;
       };
     }
 
@@ -2096,58 +2208,47 @@ class DomoLinkBackupPanel extends HTMLElement {
     const btnCancelRestore = root.querySelector("#btn-cancel-restore");
     if (btnCancelRestore) btnCancelRestore.onclick = () => this._closeRestoreModal();
 
+    const setRestoreMode = (mode) => {
+      this._restoreMode = mode;
+      this._render();
+    };
+
     const cardRestoreDownload = root.querySelector("#card-restore-download");
     if (cardRestoreDownload) {
       cardRestoreDownload.onclick = (e) => {
-        if (e.target.tagName !== "INPUT") {
-          this._restoreMode = "download_only";
-          this._render();
-        }
+        if (e.target.tagName !== "INPUT") setRestoreMode("download_only");
       };
     }
 
     const cardRestoreFull = root.querySelector("#card-restore-full");
     if (cardRestoreFull) {
       cardRestoreFull.onclick = (e) => {
-        if (e.target.tagName !== "INPUT") {
-          this._restoreMode = "full_restore";
-          this._render();
-        }
+        if (e.target.tagName !== "INPUT") setRestoreMode("full_restore");
       };
     }
 
     const cardRestorePartial = root.querySelector("#card-restore-partial");
     if (cardRestorePartial) {
       cardRestorePartial.onclick = (e) => {
-        if (e.target.tagName !== "INPUT") {
-          this._restoreMode = "partial_restore";
-          this._render();
+        if (e.target.tagName !== "INPUT" && e.target.type !== "checkbox" && e.target.tagName !== "BUTTON") {
+          setRestoreMode("partial_restore");
         }
       };
     }
 
     const radioModeDownload = root.querySelector("#radio-mode-download");
     if (radioModeDownload) {
-      radioModeDownload.onchange = () => {
-        this._restoreMode = "download_only";
-        this._render();
-      };
+      radioModeDownload.onchange = () => setRestoreMode("download_only");
     }
 
     const radioModeFull = root.querySelector("#radio-mode-full");
     if (radioModeFull) {
-      radioModeFull.onchange = () => {
-        this._restoreMode = "full_restore";
-        this._render();
-      };
+      radioModeFull.onchange = () => setRestoreMode("full_restore");
     }
 
     const radioModePartial = root.querySelector("#radio-mode-partial");
     if (radioModePartial) {
-      radioModePartial.onchange = () => {
-        this._restoreMode = "partial_restore";
-        this._render();
-      };
+      radioModePartial.onchange = () => setRestoreMode("partial_restore");
     }
 
     const restoreCheckHa = root.querySelector("#restore-check-ha");
@@ -2157,19 +2258,78 @@ class DomoLinkBackupPanel extends HTMLElement {
       };
     }
 
+    const restoreCheckIntegrations = root.querySelector("#restore-check-integrations");
+    if (restoreCheckIntegrations) {
+      restoreCheckIntegrations.onchange = (e) => {
+        this._restoreIncludeIntegrations = e.target.checked;
+      };
+    }
+
+    const restoreCheckThemes = root.querySelector("#restore-check-themes");
+    if (restoreCheckThemes) {
+      restoreCheckThemes.onchange = (e) => {
+        this._restoreIncludeThemes = e.target.checked;
+      };
+    }
+
+    const restoreCheckBlueprints = root.querySelector("#restore-check-blueprints");
+    if (restoreCheckBlueprints) {
+      restoreCheckBlueprints.onchange = (e) => {
+        this._restoreIncludeBlueprints = e.target.checked;
+      };
+    }
+
     const restoreCheckAddons = root.querySelector("#restore-check-addons");
     if (restoreCheckAddons) {
       restoreCheckAddons.onchange = (e) => {
         this._restoreIncludeAddons = e.target.checked;
+        this._render();
       };
     }
+
+    const btnToggleAllRestoreAddons = root.querySelector("#btn-toggle-all-restore-addons");
+    if (btnToggleAllRestoreAddons) {
+      btnToggleAllRestoreAddons.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (this._restoreSelectedAddons.length === this._installedAddons.length) {
+          this._restoreSelectedAddons = [];
+        } else {
+          this._restoreSelectedAddons = this._installedAddons.map(a => a.slug);
+        }
+        this._render();
+      };
+    }
+
+    root.querySelectorAll(".restore-addon-checkbox").forEach(cb => {
+      cb.onchange = (e) => {
+        const slug = e.target.getAttribute("data-addon");
+        if (e.target.checked) {
+          if (!this._restoreSelectedAddons.includes(slug)) this._restoreSelectedAddons.push(slug);
+        } else {
+          this._restoreSelectedAddons = this._restoreSelectedAddons.filter(s => s !== slug);
+        }
+      };
+    });
 
     const restoreCheckFolders = root.querySelector("#restore-check-folders");
     if (restoreCheckFolders) {
       restoreCheckFolders.onchange = (e) => {
         this._restoreIncludeFolders = e.target.checked;
+        this._render();
       };
     }
+
+    root.querySelectorAll(".restore-folder-checkbox").forEach(cb => {
+      cb.onchange = (e) => {
+        const f = e.target.getAttribute("data-folder");
+        if (e.target.checked) {
+          if (!this._restoreSelectedFolders.includes(f)) this._restoreSelectedFolders.push(f);
+        } else {
+          this._restoreSelectedFolders = this._restoreSelectedFolders.filter(x => x !== f);
+        }
+      };
+    });
 
     const btnConfirmRestore = root.querySelector("#btn-confirm-restore");
     if (btnConfirmRestore) btnConfirmRestore.onclick = () => this._executeRestore();

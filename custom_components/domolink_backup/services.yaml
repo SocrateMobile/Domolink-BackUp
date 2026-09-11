@@ -31,6 +31,24 @@ create_backup:
       default: true
       selector:
         boolean:
+    include_integrations:
+      name: "Inclure les intégrations personnalisées"
+      description: "Inclure le dossier custom_components (intégrations HACS et tierces)."
+      default: true
+      selector:
+        boolean:
+    include_themes:
+      name: "Inclure les thèmes d'interface"
+      description: "Inclure le dossier themes (thèmes Lovelace)."
+      default: true
+      selector:
+        boolean:
+    include_blueprints:
+      name: "Inclure les Blueprints"
+      description: "Inclure le dossier blueprints (modèles d'automatisations et scripts)."
+      default: true
+      selector:
+        boolean:
     addons:
       name: "Modules complémentaires (Add-ons)"
       description: "Liste des slugs d'add-ons à inclure dans la sauvegarde partielle (ex: ['core_mosquitto'])."
@@ -93,6 +111,24 @@ restore_backup:
     restore_homeassistant:
       name: "Restaurer Home Assistant Core"
       description: "Restaurer la configuration et les automatisations de Home Assistant."
+      default: true
+      selector:
+        boolean:
+    restore_integrations:
+      name: "Restaurer les intégrations personnalisées"
+      description: "Restaurer le dossier custom_components (intégrations HACS et tierces)."
+      default: true
+      selector:
+        boolean:
+    restore_themes:
+      name: "Restaurer les thèmes Lovelace"
+      description: "Restaurer le dossier themes."
+      default: true
+      selector:
+        boolean:
+    restore_blueprints:
+      name: "Restaurer les Blueprints"
+      description: "Restaurer le dossier blueprints."
       default: true
       selector:
         boolean:
