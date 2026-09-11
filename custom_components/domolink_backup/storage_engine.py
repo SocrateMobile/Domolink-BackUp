@@ -1164,6 +1164,94 @@ class DomoLinkStorageEngine:
         else:
             raise NotImplementedError(f"Téléchargement non supporté directement pour le protocole {proto}")
 
+    async def async_download_to_file(
+        self,
+        filename: str,
+        dest_path: str,
+        on_progress: Any = None,
+    ) -> bool:
+        """Download remote backup file directly to local filesystem destination with progress tracking."""
+        proto = self.protocol
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+
+        if proto in (PROTO_FTP, PROTO_FTPS):
+            cfg = self.config
+            host = cfg.get(CONF_FTP_HOST, "")
+            port = int(cfg.get(CONF_FTP_PORT, DEFAULT_FTP_PORT) or DEFAULT_FTP_PORT)
+            user = cfg.get(CONF_FTP_USER, "")
+            passwd = cfg.get(CONF_FTP_PASS, "")
+            path = (cfg.get(CONF_FTP_PATH, DEFAULT_FTP_PATH) or DEFAULT_FTP_PATH).strip()
+            use_tls = bool(cfg.get(CONF_FTP_TLS, False) or proto == PROTO_FTPS)
+
+            def _sync_dl():
+                ftp = None
+                bytes_received = 0
+                try:
+                    ftp = _get_ftp_connection(host, port, user, passwd, use_tls, timeout=180)
+                    _ftp_ensure_dir(ftp, path)
+                    with open(dest_path, "wb") as f:
+                        def _callback(chunk: bytes):
+                            nonlocal bytes_received
+                            f.write(chunk)
+                            bytes_received += len(chunk)
+                            if on_progress:
+                                self.hass.loop.call_soon_threadsafe(on_progress, bytes_received)
+
+                        ftp.retrbinary(f"RETR {filename}", _callback, blocksize=131072)
+                    return True
+                finally:
+                    if ftp:
+                        try:
+                            ftp.quit()
+                        except Exception:
+                            try:
+                                ftp.close()
+                            except Exception:
+                                pass
+
+            return await self.hass.async_add_executor_job(_sync_dl)
+
+        elif proto == PROTO_WEBDAV:
+            cfg = self.config
+            url = cfg.get(CONF_WEBDAV_URL, "").strip().rstrip("/")
+            user = cfg.get(CONF_WEBDAV_USER, "").strip()
+            passwd = cfg.get(CONF_WEBDAV_PASS, "").strip()
+            path = (cfg.get(CONF_WEBDAV_PATH, DEFAULT_WEBDAV_PATH) or DEFAULT_WEBDAV_PATH).strip().strip("/")
+            verify_ssl = bool(cfg.get(CONF_WEBDAV_VERIFY_SSL, True))
+
+            session = async_get_clientsession(self.hass, verify_ssl=verify_ssl)
+            auth = aiohttp.BasicAuth(user, passwd) if user and passwd else None
+            file_url = f"{url}/{path}/{filename}" if path else f"{url}/{filename}"
+
+            async with session.get(file_url, auth=auth, timeout=aiohttp.ClientTimeout(total=7200)) as resp:
+                if resp.status != 200:
+                    raise FileNotFoundError(f"Fichier non trouvé sur WebDAV (HTTP {resp.status})")
+                bytes_received = 0
+                with open(dest_path, "wb") as f:
+                    while True:
+                        chunk = await resp.content.read(131072)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        bytes_received += len(chunk)
+                        if on_progress:
+                            on_progress(bytes_received)
+                return True
+
+        elif proto == PROTO_LOCAL_SHARE:
+            dest_dir = self.config.get(CONF_LOCAL_SHARE_PATH, DEFAULT_LOCAL_SHARE_PATH)
+            src_path = os.path.join(dest_dir, filename)
+            if not os.path.exists(src_path):
+                raise FileNotFoundError(f"Fichier source introuvable sur le partage : {src_path}")
+            def _sync_copy():
+                import shutil
+                shutil.copy2(src_path, dest_path)
+                return True
+            return await self.hass.async_add_executor_job(_sync_copy)
+
+        else:
+            raise NotImplementedError(f"Protocole {proto} non supporté pour le rapatriement direct.")
+
     async def _async_download_ftp(self, filename: str, dest_path: str) -> None:
         cfg = self.config
         host = cfg.get(CONF_FTP_HOST, "")

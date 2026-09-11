@@ -95,13 +95,16 @@ class DomoLinkBackupPanel extends HTMLElement {
     this._hass = null;
     this._data = {};
     this._config = {};
-    this._version = "1.2.1";
+    this._version = "1.3.0";
     this._activeTab = "dashboard";
     this._refreshTimer = null;
     this._showBackupModal = false;
     this._showReport = true;
     this._modalBackupName = "";
     this._modalIncludeDb = true;
+    this._showRestoreModal = false;
+    this._restoreModalBackup = null;
+    this._restoreMode = "download_only";
     this._templateInputVal = "";
     this._templateSavedNotice = "";
     this._localPathInputVal = "";
@@ -204,6 +207,42 @@ class DomoLinkBackupPanel extends HTMLElement {
       this._scheduleRefresh();
     } catch (err) {
       alert("Erreur lors du déclenchement de la sauvegarde : " + (err.message || err));
+    }
+  }
+
+  _openRestoreModal(backup) {
+    this._restoreModalBackup = backup;
+    this._restoreMode = "download_only";
+    this._showRestoreModal = true;
+    this._render();
+  }
+
+  _closeRestoreModal() {
+    this._showRestoreModal = false;
+    this._restoreModalBackup = null;
+    this._render();
+  }
+
+  async _executeRestore() {
+    if (!this._hass || !this._restoreModalBackup) return;
+    const backup = this._restoreModalBackup;
+    const filename = backup.filename || backup.name;
+    const restoreMode = this._restoreMode || "download_only";
+    this._closeRestoreModal();
+    this._showReport = true;
+    this._activeTab = "dashboard";
+    this._render();
+
+    try {
+      await this._hass.callWS({
+        type: "domolink_backup/restore_backup",
+        filename: filename,
+        restore_mode: restoreMode,
+      });
+      this._fetchData();
+      this._scheduleRefresh();
+    } catch (err) {
+      alert("Erreur lors du lancement de la restauration : " + (err.message || err));
     }
   }
 
@@ -1025,6 +1064,23 @@ class DomoLinkBackupPanel extends HTMLElement {
           background: rgba(239, 68, 68, 0.3);
         }
 
+        .btn-restore {
+          background: rgba(59, 130, 246, 0.15);
+          color: #60a5fa;
+          border: 1px solid rgba(59, 130, 246, 0.35);
+          padding: 6px 12px;
+          border-radius: 6px;
+          cursor: pointer;
+          font-size: 12px;
+          font-weight: 600;
+          transition: all 0.2s ease;
+        }
+
+        .btn-restore:hover {
+          background: rgba(59, 130, 246, 0.35);
+          color: #93c5fd;
+        }
+
         pre {
           background: #090d16;
           padding: 16px;
@@ -1048,7 +1104,7 @@ class DomoLinkBackupPanel extends HTMLElement {
           </div>
           <div class="badge-status">
             <div class="badge-dot"></div>
-            <span>${isBusy ? "Sauvegarde en cours..." : connState}</span>
+            <span>${isBusy ? (d.status || "Opération en cours...") : connState}</span>
           </div>
         </div>
 
@@ -1274,8 +1330,11 @@ class DomoLinkBackupPanel extends HTMLElement {
                       <td>${b.date ? new Date(b.date).toLocaleString('fr-FR') : 'Inconnue'}</td>
                       <td>${b.size ? (roundSize(b.size)) : '0 Ko'}</td>
                       <td><span class="tag-proto">${b.protocol || 'ftp'}</span></td>
-                      <td style="text-align: right;">
-                        <button class="btn-delete" data-id="${b.backup_id}" data-name="${b.name}">
+                      <td style="text-align: right; white-space: nowrap;">
+                        <button class="btn-restore" data-filename="${b.filename || b.name}" data-id="${b.backup_id}">
+                          🔄 Restaurer
+                        </button>
+                        <button class="btn-delete" data-id="${b.backup_id}" data-name="${b.name}" style="margin-left: 6px;">
                           🗑️ Supprimer
                         </button>
                       </td>
@@ -1531,6 +1590,53 @@ class DomoLinkBackupPanel extends HTMLElement {
           </div>
         </div>
       ` : ''}
+
+      <!-- MODAL POPIN: RESTAURATION / RAPATRIEMENT DISTANT -->
+      ${this._showRestoreModal && this._restoreModalBackup ? `
+        <div class="modal-overlay" id="modal-restore-overlay">
+          <div class="modal-card" style="max-width: 560px;">
+            <div class="modal-header">
+              <h3 class="modal-title">🔄 Restauration & Rapatriement</h3>
+              <button class="btn btn-secondary" id="btn-close-restore-modal" style="padding: 4px 10px; font-size: 12px;">✕</button>
+            </div>
+            <div class="modal-body">
+              <p style="font-size: 13px; color: #94a3b8; margin-top: 0; margin-bottom: 14px;">
+                Sélectionnez le mode d'action pour l'archive distante :<br>
+                <code style="color: #38bdf8; font-size: 12px; word-break: break-all; font-weight: 600;">${this._restoreModalBackup.name || this._restoreModalBackup.filename}</code>
+                ${this._restoreModalBackup.size ? ` <span style="color: #64748b; font-size: 12px;">(${roundSize(this._restoreModalBackup.size)})</span>` : ''}
+              </p>
+
+              <div style="display: flex; flex-direction: column; gap: 12px; margin-bottom: 18px;">
+                <label style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: ${this._restoreMode === 'download_only' ? 'rgba(59, 130, 246, 0.12)' : 'rgba(255,255,255,0.03)'}; border: 1px solid ${this._restoreMode === 'download_only' ? '#3b82f6' : 'rgba(255,255,255,0.1)'}; border-radius: 8px; cursor: pointer; transition: all 0.2s;">
+                  <input type="radio" name="restore_mode_radio" value="download_only" id="radio-mode-download" ${this._restoreMode === 'download_only' ? 'checked' : ''} style="margin-top: 3px; cursor: pointer;">
+                  <div>
+                    <div style="font-weight: 700; color: #f8fafc; font-size: 14px;">📥 Rapatrier vers Home Assistant (Recommandé)</div>
+                    <div style="font-size: 12px; color: #94a3b8; margin-top: 4px; line-height: 1.4;">
+                      Télécharge l'archive distante vers <code>/config/backups</code> et l'enregistre immédiatement dans Home Assistant (Supervisor). Elle apparaîtra instantanément dans votre menu <em>Paramètres &gt; Système &gt; Sauvegardes</em> pour restauration ultérieure sans risque.
+                    </div>
+                  </div>
+                </label>
+
+                <label style="display: flex; align-items: flex-start; gap: 12px; padding: 14px; background: ${this._restoreMode === 'full_restore' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(255,255,255,0.03)'}; border: 1px solid ${this._restoreMode === 'full_restore' ? '#ef4444' : 'rgba(255,255,255,0.1)'}; border-radius: 8px; cursor: pointer; transition: all 0.2s;">
+                  <input type="radio" name="restore_mode_radio" value="full_restore" id="radio-mode-full" ${this._restoreMode === 'full_restore' ? 'checked' : ''} style="margin-top: 3px; cursor: pointer;">
+                  <div>
+                    <div style="font-weight: 700; color: #f87171; font-size: 14px;">⚡ Restauration Complète du système</div>
+                    <div style="font-size: 12px; color: #94a3b8; margin-top: 4px; line-height: 1.4;">
+                      Télécharge l'archive, l'enregistre dans Home Assistant, et lance immédiatement la restauration complète de l'ensemble de votre domotique. ⚠️ <em>Attention : Home Assistant redémarrera pendant l'opération.</em>
+                    </div>
+                  </div>
+                </label>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" id="btn-cancel-restore">Annuler</button>
+              <button class="btn btn-primary" id="btn-confirm-restore" style="${this._restoreMode === 'full_restore' ? 'background: #dc2626; border-color: #ef4444;' : ''}">
+                ${this._restoreMode === 'full_restore' ? '⚡ Lancer la Restauration Complète' : '📥 Rapatrier l\'archive'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ` : ''}
     `;
 
     this._bindEvents();
@@ -1668,7 +1774,7 @@ class DomoLinkBackupPanel extends HTMLElement {
       };
     }
 
-    // Modal Events
+    // Modal Events (Backup)
     const btnCloseModal = root.querySelector("#btn-close-modal");
     if (btnCloseModal) btnCloseModal.onclick = () => this._closeBackupModal();
 
@@ -1701,7 +1807,44 @@ class DomoLinkBackupPanel extends HTMLElement {
     const btnConfirmBackup = root.querySelector("#btn-confirm-backup");
     if (btnConfirmBackup) btnConfirmBackup.onclick = () => this._executeBackup();
 
-    // Delete buttons
+    // Modal Events (Restore)
+    const btnCloseRestoreModal = root.querySelector("#btn-close-restore-modal");
+    if (btnCloseRestoreModal) btnCloseRestoreModal.onclick = () => this._closeRestoreModal();
+
+    const btnCancelRestore = root.querySelector("#btn-cancel-restore");
+    if (btnCancelRestore) btnCancelRestore.onclick = () => this._closeRestoreModal();
+
+    const radioModeDownload = root.querySelector("#radio-mode-download");
+    if (radioModeDownload) {
+      radioModeDownload.onchange = () => {
+        this._restoreMode = "download_only";
+        this._render();
+      };
+    }
+
+    const radioModeFull = root.querySelector("#radio-mode-full");
+    if (radioModeFull) {
+      radioModeFull.onchange = () => {
+        this._restoreMode = "full_restore";
+        this._render();
+      };
+    }
+
+    const btnConfirmRestore = root.querySelector("#btn-confirm-restore");
+    if (btnConfirmRestore) btnConfirmRestore.onclick = () => this._executeRestore();
+
+    // Table Action Buttons: Restore
+    root.querySelectorAll(".btn-restore").forEach(btn => {
+      btn.onclick = (e) => {
+        const btnEl = e.currentTarget;
+        const filename = btnEl.getAttribute("data-filename");
+        const backupId = btnEl.getAttribute("data-id");
+        const backup = (this._data && this._data.backups_list) ? this._data.backups_list.find(x => x.filename === filename || x.backup_id === backupId || x.name === filename) : null;
+        this._openRestoreModal(backup || { filename: filename, name: filename });
+      };
+    });
+
+    // Table Action Buttons: Delete
     root.querySelectorAll(".btn-delete").forEach(btn => {
       btn.onclick = (e) => {
         const id = e.target.getAttribute("data-id");

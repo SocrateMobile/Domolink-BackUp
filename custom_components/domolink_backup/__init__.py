@@ -9,8 +9,10 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 import glob
+import json
 import logging
 import os
+import tarfile
 import time
 from typing import Any
 
@@ -88,21 +90,26 @@ from .const import (
     PROTO_WEBDAV,
     SERVICE_CLEAN_OLD_BACKUPS,
     SERVICE_CREATE_BACKUP,
+    SERVICE_RESTORE_BACKUP,
     SERVICE_SYNC_BACKUPS,
     SERVICE_TEST_CONNECTION,
     SERVICE_UPLOAD_BACKUP,
     STAGE_COMPLETED,
     STAGE_CREATING_LOCAL,
+    STAGE_DOWNLOADING,
     STAGE_FAILED,
     STAGE_FINISHING,
     STAGE_IDLE,
     STAGE_PREPARING,
+    STAGE_RESTORING,
     STAGE_UPLOADING,
     STAGE_VERIFYING,
     STATE_BACKING_UP,
     STATE_CLEANING,
+    STATE_DOWNLOADING,
     STATE_ERROR,
     STATE_IDLE,
+    STATE_RESTORING,
     STATE_SUCCESS,
     STATE_TESTING,
     STATE_UPLOADING,
@@ -559,6 +566,46 @@ async def async_download_backup_via_manager(
         return True
     except Exception as err:
         _LOGGER.debug("DomoLink-BackUp: async_download_backup échoué via manager: %s", err)
+        return False
+
+
+def _sync_read_tar_backup_json(tar_path: str) -> dict[str, Any]:
+    """Safely extract and parse backup.json or snapshot.json from a .tar archive."""
+    try:
+        with tarfile.open(tar_path, "r:*") as tar:
+            for member_name in ("./backup.json", "backup.json", "./snapshot.json", "snapshot.json"):
+                try:
+                    f = tar.extractfile(member_name)
+                    if f:
+                        return json.load(f)
+                except KeyError:
+                    continue
+    except Exception as err:
+        _LOGGER.debug("DomoLink-BackUp: Impossible d'extraire backup.json de %s: %s", tar_path, err)
+    return {}
+
+
+async def async_upload_backup_to_supervisor(hass: HomeAssistant, tar_path: str) -> bool:
+    """Upload and register a local .tar backup archive into Home Assistant Supervisor."""
+    host, headers = _get_supervisor_auth_headers()
+    url = f"http://{host}/backups/new/upload"
+
+    try:
+        from homeassistant.helpers.aiohttp_client import async_get_clientsession
+        session = async_get_clientsession(hass)
+        data = aiohttp.FormData()
+        with open(tar_path, "rb") as f:
+            data.add_field("file", f, filename=os.path.basename(tar_path), content_type="application/x-tar")
+            async with session.post(url, data=data, headers=headers, timeout=aiohttp.ClientTimeout(total=600)) as resp:
+                if resp.status in (200, 201):
+                    res_json = await resp.json()
+                    _LOGGER.info("DomoLink-BackUp: Archive injectée avec succès dans Supervisor: %s", res_json)
+                    return True
+                else:
+                    _LOGGER.warning("DomoLink-BackUp: Échec upload vers Supervisor /backups/new/upload (HTTP %s)", resp.status)
+                    return False
+    except Exception as err:
+        _LOGGER.warning("DomoLink-BackUp: Exception upload vers Supervisor: %s", err)
         return False
 
 
@@ -1657,6 +1704,235 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self.async_refresh_backups_list()
         return success
 
+    async def async_restore_backup(
+        self,
+        filename: str,
+        restore_mode: str = "download_only",
+    ) -> bool:
+        """Download remote backup archive and optionally trigger system restoration."""
+        if self.data.get("is_busy"):
+            _LOGGER.warning("DomoLink-BackUp: Une opération est déjà en cours.")
+            return False
+
+        clean_filename = os.path.basename(filename.strip())
+        dest_label = self.storage_engine.destination_label
+        start_time = time.monotonic()
+
+        # Find target backup metadata in remote list if possible
+        backups = await self.storage_engine.async_list_backups()
+        target = next(
+            (b for b in backups if b.get("filename") == clean_filename or b.get("name") == clean_filename or b.get("backup_id") == clean_filename),
+            None,
+        )
+        expected_size = target.get("size", 0) if target else 0
+
+        self.set_status(
+            STATE_DOWNLOADING,
+            f"Rapatriement de '{clean_filename}' depuis {dest_label}...",
+            is_busy=True,
+        )
+        self.update_progress(
+            STAGE_DOWNLOADING,
+            5,
+            "Rapatriement distant",
+            f"Connexion à {dest_label} pour récupérer {clean_filename}...",
+            log_msg=f"📥 Début du rapatriement de '{clean_filename}' depuis {dest_label}...",
+            current_file=clean_filename,
+            total_bytes=expected_size,
+        )
+
+        target_dl_dir = self.hass.config.path("backups")
+        await self.hass.async_add_executor_job(os.makedirs, target_dl_dir, True)
+        local_dest = os.path.join(target_dl_dir, clean_filename)
+
+        dl_start = time.monotonic()
+        last_log = 0.0
+
+        def _on_download_progress(bytes_received: int) -> None:
+            nonlocal last_log
+            now_mono = time.monotonic()
+            elapsed_dl = max(0.1, now_mono - dl_start)
+            speed_bytes_sec = bytes_received / elapsed_dl
+            speed_mb_sec = round(speed_bytes_sec / (1024 * 1024), 2)
+            received_mb = round(bytes_received / (1024 * 1024), 1)
+
+            if expected_size > 0:
+                pct = 5 + int((bytes_received / expected_size) * 75)
+                pct = min(pct, 80)
+                tot_mb = round(expected_size / (1024 * 1024), 1)
+                detail = f"{received_mb} Mo / {tot_mb} Mo ({pct}%) • {speed_mb_sec} Mo/s"
+            else:
+                pct = min(80, 10 + int(bytes_received / (10 * 1024 * 1024)))
+                detail = f"{received_mb} Mo téléchargés • {speed_mb_sec} Mo/s"
+
+            self.update_progress(
+                STAGE_DOWNLOADING,
+                pct,
+                "Rapatriement distant",
+                detail,
+                current_file=clean_filename,
+                transferred_bytes=bytes_received,
+                total_bytes=expected_size,
+                speed_kbps=round(speed_bytes_sec / 1024, 1),
+            )
+
+            if now_mono - last_log >= 3.0:
+                last_log = now_mono
+                self.update_progress(
+                    STAGE_DOWNLOADING,
+                    pct,
+                    "Rapatriement distant",
+                    detail,
+                    log_msg=f"Téléchargement : {detail}",
+                )
+
+        try:
+            # 1. Download file to local_dest
+            success = await self.storage_engine.async_download_to_file(
+                clean_filename, local_dest, on_progress=_on_download_progress
+            )
+            if not success or not os.path.isfile(local_dest) or os.path.getsize(local_dest) == 0:
+                raise RuntimeError(f"Échec du téléchargement du fichier {clean_filename}")
+
+            final_size = os.path.getsize(local_dest)
+            final_mb = round(final_size / (1024 * 1024), 2)
+
+            # 2. Inspect archive internal backup.json to get slug and metadata
+            meta = await self.hass.async_add_executor_job(_sync_read_tar_backup_json, local_dest)
+            internal_slug = meta.get("slug")
+            backup_display_name = meta.get("name") or clean_filename
+
+            self.update_progress(
+                STAGE_VERIFYING,
+                85,
+                "Archive vérifiée",
+                f"{backup_display_name} ({final_mb} Mo)",
+                log_msg=f"✓ Archive rapatriée avec succès : {final_mb} Mo (Slug détecté : {internal_slug or 'aucun'})",
+            )
+
+            # 3. If Supervisor is available, register / upload it
+            ha_info = await async_get_ha_backup_info(self.hass)
+            if ha_info.get("supervisor_available") or "hassio" in self.hass.config.components:
+                self.update_progress(
+                    STAGE_VERIFYING,
+                    90,
+                    "Enregistrement Supervisor",
+                    "Injection de l'archive dans Home Assistant...",
+                    log_msg="Enregistrement de l'archive dans le gestionnaire Supervisor...",
+                )
+                sup_ok = await async_upload_backup_to_supervisor(self.hass, local_dest)
+                if sup_ok:
+                    _LOGGER.info("DomoLink-BackUp: Archive '%s' injectée dans Supervisor.", clean_filename)
+
+            # Also ensure a copy exists with {internal_slug}.tar if slug is known
+            if internal_slug and internal_slug != clean_filename.removesuffix(".tar"):
+                slug_tar = os.path.join(target_dl_dir, f"{internal_slug}.tar")
+                if not os.path.exists(slug_tar):
+                    try:
+                        import shutil
+                        await self.hass.async_add_executor_job(shutil.copy2, local_dest, slug_tar)
+                    except Exception as copy_err:
+                        _LOGGER.debug("DomoLink-BackUp: Copie slug .tar: %s", copy_err)
+
+            elapsed_total = round(time.monotonic() - start_time, 1)
+
+            # 4. If mode is full_restore, trigger the actual restoration
+            if restore_mode == "full_restore":
+                target_slug = internal_slug or clean_filename.removesuffix(".tar")
+                self.set_status(
+                    STATE_RESTORING,
+                    f"Restauration de '{backup_display_name}'...",
+                    is_busy=True,
+                )
+                self.update_progress(
+                    STAGE_RESTORING,
+                    95,
+                    "Restauration du système",
+                    "Lancement de la restauration. Home Assistant va redémarrer...",
+                    log_msg=f"⚡ Lancement de la restauration complète pour l'archive '{backup_display_name}' (slug: {target_slug})...",
+                    level="warning",
+                )
+                await self.notifier.async_notify_start(f"Restauration : {backup_display_name}", "Home Assistant (Système)")
+
+                # Trigger restore service
+                if self.hass.services.has_service("hassio", "backup_restore_full"):
+                    _LOGGER.info("DomoLink-BackUp: Appel hassio.backup_restore_full pour slug %s", target_slug)
+                    await self.hass.services.async_call(
+                        "hassio", "backup_restore_full", {"slug": target_slug}, blocking=False
+                    )
+                elif self.hass.services.has_service("backup", "restore"):
+                    _LOGGER.info("DomoLink-BackUp: Appel backup.restore pour backup_id %s", target_slug)
+                    await self.hass.services.async_call(
+                        "backup", "restore", {"backup_id": target_slug}, blocking=False
+                    )
+                else:
+                    raise RuntimeError("Aucun service de restauration Home Assistant disponible.")
+
+                restore_report = {
+                    "operation": "Restauration Complète du système",
+                    "backup_name": backup_display_name,
+                    "destination": "Home Assistant (Système)",
+                    "source_path": f"{dest_label}/{clean_filename}",
+                    "size_bytes": final_size,
+                    "size_mb": final_mb,
+                    "duration_sec": elapsed_total,
+                    "duration_formatted": f"{int(elapsed_total // 60)}m {int(elapsed_total % 60)}s" if elapsed_total >= 60 else f"{elapsed_total}s",
+                    "compression_ratio": "Archive .tar d'origine",
+                    "components": [f"Slug: {target_slug}", "Mode: Restauration complète"],
+                }
+                self.data["last_report"] = restore_report
+                self.data["progress"]["report"] = restore_report
+                self.async_set_updated_data(self.data)
+                return True
+
+            # Otherwise (download_only):
+            self.set_status(STATE_SUCCESS, f"Rapatriement réussi ({final_mb} Mo)", is_busy=False)
+            restore_report = {
+                "operation": "Rapatriement vers Home Assistant",
+                "backup_name": backup_display_name,
+                "destination": "Stockage local (/config/backups)",
+                "source_path": f"{dest_label}/{clean_filename}",
+                "size_bytes": final_size,
+                "size_mb": final_mb,
+                "duration_sec": elapsed_total,
+                "duration_formatted": f"{int(elapsed_total // 60)}m {int(elapsed_total % 60)}s" if elapsed_total >= 60 else f"{elapsed_total}s",
+                "compression_ratio": "Archive .tar d'origine",
+                "components": [f"Slug détecté: {internal_slug or 'aucun'}", "Statut: Enregistré dans Supervisor"],
+            }
+            self.data["last_report"] = restore_report
+            self.data["progress"]["report"] = restore_report
+            self.update_progress(
+                STAGE_COMPLETED,
+                100,
+                "Rapatriement réussi",
+                f"L'archive '{backup_display_name}' ({final_mb} Mo) est prête dans vos sauvegardes locales.",
+                log_msg=f"✓ Rapatriement terminé en {elapsed_total}s ({final_mb} Mo). Disponible dans Paramètres > Sauvegardes.",
+                level="success",
+            )
+            await self.notifier.async_notify_success(
+                backup_name=f"Rapatriement: {backup_display_name}",
+                destination="Stockage local HA",
+                size_bytes=final_size,
+                duration_sec=elapsed_total,
+                remaining_count=self.data.get("total_backups_count", 1),
+                total_size_mb=self.data.get("total_storage_mb", final_mb),
+            )
+            return True
+
+        except Exception as err:
+            _LOGGER.exception("DomoLink-BackUp: Erreur lors du rapatriement/restauration: %s", err)
+            self.set_status(STATE_ERROR, f"Erreur de restauration : {err}", is_busy=False, error=str(err))
+            self.update_progress(
+                STAGE_FAILED,
+                100,
+                "Échec de restauration",
+                str(err),
+                log_msg=f"✗ Échec du rapatriement ou de la restauration : {err}",
+                level="error",
+            )
+            await self.notifier.async_notify_error(f"Restauration: {clean_filename}", dest_label, str(err))
+            return False
+
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up DomoLink-BackUp from a config entry."""
@@ -1733,6 +2009,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if file_path:
             await coordinator.async_upload_file(file_path)
 
+    async def _handle_restore_backup(call: ServiceCall) -> None:
+        filename = call.data.get("filename")
+        restore_mode = call.data.get("restore_mode", "download_only")
+        if filename:
+            await coordinator.async_restore_backup(filename, restore_mode)
+
     async def _handle_test_connection(call: ServiceCall) -> None:
         await coordinator.async_run_test_connection()
 
@@ -1749,9 +2031,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     schema_upload = vol.Schema({
         vol.Required("file_path"): str,
     })
+    schema_restore = vol.Schema({
+        vol.Required("filename"): str,
+        vol.Optional("restore_mode", default="download_only"): vol.In(["download_only", "full_restore"]),
+    })
 
     hass.services.async_register(DOMAIN, SERVICE_CREATE_BACKUP, _handle_create_backup, schema=schema_create)
     hass.services.async_register(DOMAIN, SERVICE_UPLOAD_BACKUP, _handle_upload_backup, schema=schema_upload)
+    hass.services.async_register(DOMAIN, SERVICE_RESTORE_BACKUP, _handle_restore_backup, schema=schema_restore)
     hass.services.async_register(DOMAIN, SERVICE_TEST_CONNECTION, _handle_test_connection)
     hass.services.async_register(DOMAIN, SERVICE_CLEAN_OLD_BACKUPS, _handle_clean_old_backups)
     hass.services.async_register(DOMAIN, SERVICE_SYNC_BACKUPS, _handle_sync_backups)
@@ -1909,6 +2196,25 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         connection.send_result(msg["id"], {"success": success})
 
     @websocket_command({
+        vol.Required("type"): "domolink_backup/restore_backup",
+        vol.Required("filename"): str,
+        vol.Optional("restore_mode", default="download_only"): vol.In(["download_only", "full_restore"]),
+    })
+    @async_response
+    async def ws_restore_backup(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
+        coordinator = _get_active_coordinator(hass)
+        if not coordinator:
+            connection.send_error(msg["id"], "not_found", "Coordinateur non disponible")
+            return
+        filename = msg["filename"]
+        restore_mode = msg.get("restore_mode", "download_only")
+        hass.async_create_task(
+            coordinator.async_restore_backup(filename, restore_mode),
+            name=f"{DOMAIN}_restore_task",
+        )
+        connection.send_result(msg["id"], {"success": True, "status": "started"})
+
+    @websocket_command({
         vol.Required("type"): "domolink_backup/scan_local_backup_paths",
         vol.Optional("extra_roots"): [str],
     })
@@ -2004,6 +2310,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         async_register_command(hass, ws_test_connection)
         async_register_command(hass, ws_clean_backups)
         async_register_command(hass, ws_delete_backup)
+        async_register_command(hass, ws_restore_backup)
     except Exception:
         pass
 
@@ -2029,6 +2336,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 SERVICE_TEST_CONNECTION,
                 SERVICE_CLEAN_OLD_BACKUPS,
                 SERVICE_SYNC_BACKUPS,
+                SERVICE_RESTORE_BACKUP,
             ):
                 try:
                     hass.services.async_remove(DOMAIN, svc)
