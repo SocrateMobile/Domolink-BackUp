@@ -21,8 +21,16 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up DomoLink-BackUp button platform from config entry."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator = data["coordinator"]
+    entry_data = hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})
+    coordinator = entry_data.get("coordinator")
+    if not coordinator:
+        for ed in hass.data.get(DOMAIN, {}).values():
+            if isinstance(ed, dict) and "coordinator" in ed:
+                coordinator = ed["coordinator"]
+                break
+    if not coordinator:
+        _LOGGER.error("Coordinator not found for entry %s in button platform", entry.entry_id)
+        return
 
     entities: list[ButtonEntity] = [
         DomoLinkBackupNowButton(coordinator, entry),

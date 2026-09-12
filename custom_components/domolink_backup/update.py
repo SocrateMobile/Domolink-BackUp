@@ -67,8 +67,13 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the update platform for DomoLink-BackUp."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator = data.get("coordinator")
+    entry_data = hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})
+    coordinator = entry_data.get("coordinator")
+    if not coordinator:
+        for ed in hass.data.get(DOMAIN, {}).values():
+            if isinstance(ed, dict) and "coordinator" in ed:
+                coordinator = ed["coordinator"]
+                break
     installed_ver = get_installed_version()
 
     update_entity = DomolinkBackupUpdateEntity(
@@ -78,7 +83,7 @@ async def async_setup_entry(
         coordinator=coordinator,
     )
 
-    data["update_entity"] = update_entity
+    entry_data["update_entity"] = update_entity
     async_add_entities([update_entity], True)
 
 
@@ -192,8 +197,16 @@ class DomolinkBackupUpdateEntity(UpdateEntity):
                 self._update_sidebar_panel(has_update)
 
                 # Sync update state to coordinator data for instant frontend propagation
-                if self._coordinator:
-                    self._coordinator.data.update(
+                coord = self._coordinator or self.hass.data.get(DOMAIN, {}).get(self.entry.entry_id, {}).get("coordinator")
+                if not coord:
+                    for ed in self.hass.data.get(DOMAIN, {}).values():
+                        if isinstance(ed, dict) and "coordinator" in ed:
+                            coord = ed["coordinator"]
+                            break
+                if coord:
+                    if getattr(coord, "data", None) is None:
+                        coord.data = {}
+                    coord.data.update(
                         {
                             "update_available": has_update,
                             "latest_version": clean_tag,
@@ -201,7 +214,10 @@ class DomolinkBackupUpdateEntity(UpdateEntity):
                             "release_url": self._attr_release_url,
                         }
                     )
-                    self._coordinator.async_set_updated_data(self._coordinator.data)
+                    try:
+                        coord.async_set_updated_data(coord.data)
+                    except Exception:
+                        pass
 
                 self.async_write_ha_state()
                 _LOGGER.info(
