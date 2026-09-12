@@ -143,7 +143,7 @@ class DomoLinkBackupPanel extends HTMLElement {
     this._hass = null;
     this._data = {};
     this._config = {};
-    this._version = "1.5.2";
+    this._version = "1.5.3";
     this._activeTab = "dashboard";
     this._refreshTimer = null;
     this._showBackupModal = false;
@@ -191,7 +191,7 @@ class DomoLinkBackupPanel extends HTMLElement {
     const updateEntity = hass && hass.states && hass.states["update.domolink_backup"];
     if (updateEntity) {
       const d = this._data || {};
-      const currentVer = this._version || (updateEntity.attributes && updateEntity.attributes.installed_version) || "1.5.2";
+      const currentVer = this._version || (updateEntity.attributes && updateEntity.attributes.installed_version) || "1.5.3";
       const latestVersion = d.latest_version || (updateEntity.attributes && updateEntity.attributes.latest_version) || currentVer;
       const hasUpdate = Boolean(d.update_available || updateEntity.state === "on" || isNewerVersion(latestVersion, currentVer));
       this._syncSidebarBadge(hasUpdate);
@@ -516,7 +516,7 @@ class DomoLinkBackupPanel extends HTMLElement {
   _showUpdateModal() {
     const updateEntity = this._hass && this._hass.states && this._hass.states["update.domolink_backup"];
     const d = this._data || {};
-    const currentVer = this._version || (updateEntity && updateEntity.attributes && updateEntity.attributes.installed_version) || "1.5.2";
+    const currentVer = this._version || (updateEntity && updateEntity.attributes && updateEntity.attributes.installed_version) || "1.5.3";
     const latestVer = d.latest_version || (updateEntity && updateEntity.attributes && updateEntity.attributes.latest_version) || currentVer;
     const releaseNotes = d.release_notes || (updateEntity && updateEntity.attributes && updateEntity.attributes.release_summary) || "Mise à jour officielle de DomoLink-BackUp.";
     const releaseUrl = d.release_url || (updateEntity && updateEntity.attributes && updateEntity.attributes.release_url) || `https://github.com/SocrateMobile/Domolink-BackUp/releases/tag/v${latestVer}`;
@@ -739,7 +739,7 @@ class DomoLinkBackupPanel extends HTMLElement {
     const configuredLocalPath = this._localPathInputVal || d.local_backup_path || cfg.local_backup_path || "";
 
     const updateEntity = this._hass && this._hass.states && this._hass.states["update.domolink_backup"];
-    const currentVer = this._version || (updateEntity && updateEntity.attributes && updateEntity.attributes.installed_version) || "1.5.2";
+    const currentVer = this._version || (updateEntity && updateEntity.attributes && updateEntity.attributes.installed_version) || "1.5.3";
     const latestVersion = d.latest_version || (updateEntity && updateEntity.attributes && updateEntity.attributes.latest_version) || currentVer;
     const hasUpdate = Boolean(d.update_available || (updateEntity && updateEntity.state === "on") || isNewerVersion(latestVersion, currentVer));
 
@@ -2753,7 +2753,7 @@ class DomoLinkBackupPanel extends HTMLElement {
     // HA Sidebar Notification Badge Sync
     const updateEntity = this._hass && this._hass.states && this._hass.states["update.domolink_backup"];
     const d = this._data || {};
-    const currentVer = this._version || (updateEntity && updateEntity.attributes && updateEntity.attributes.installed_version) || "1.5.2";
+    const currentVer = this._version || (updateEntity && updateEntity.attributes && updateEntity.attributes.installed_version) || "1.5.3";
     const latestVersion = d.latest_version || (updateEntity && updateEntity.attributes && updateEntity.attributes.latest_version) || currentVer;
     const hasUpdate = Boolean(d.update_available || (updateEntity && updateEntity.state === "on") || isNewerVersion(latestVersion, currentVer));
     this._syncSidebarBadge(hasUpdate);

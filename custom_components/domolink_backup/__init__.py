@@ -2415,21 +2415,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_register(DOMAIN, SERVICE_TEST_CONNECTION, _handle_test_connection)
     hass.services.async_register(DOMAIN, SERVICE_CLEAN_OLD_BACKUPS, _handle_clean_old_backups)
     hass.services.async_register(DOMAIN, SERVICE_SYNC_BACKUPS, _handle_sync_backups)
-    if not hass.services.has(DOMAIN, "check_updates"):
+    if not hass.services.has_service(DOMAIN, "check_updates"):
         hass.services.async_register(DOMAIN, "check_updates", _handle_check_updates)
-    if not hass.services.has(DOMAIN, "install_update"):
+    if not hass.services.has_service(DOMAIN, "install_update"):
         hass.services.async_register(DOMAIN, "install_update", _handle_install_update)
 
     # ─── Enregistrement des commandes WebSocket pour le Dashboard UI ───
     _register_websocket_commands(hass)
 
-    # First setup core platforms (sensor, button)
-    await hass.config_entries.async_forward_entry_setups(entry, ["sensor", "button"])
-
-    # Then setup dependent platforms (update)
-    remaining_platforms = [p for p in PLATFORMS if p not in ("sensor", "button")]
-    if remaining_platforms:
-        await hass.config_entries.async_forward_entry_setups(entry, remaining_platforms)
+    # Forward setup to entity platforms
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Listen for options changes
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
