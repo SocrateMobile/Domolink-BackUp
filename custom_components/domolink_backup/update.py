@@ -219,8 +219,11 @@ class DomolinkBackupUpdateEntity(UpdateEntity):
                     except Exception:
                         pass
 
-                if self.entity_id is not None:
-                    self.async_write_ha_state()
+                if getattr(self, "hass", None) and getattr(self, "entity_id", None):
+                    try:
+                        self.async_write_ha_state()
+                    except Exception:
+                        pass
                 _LOGGER.info(
                     "DomoLink-BackUp update check: installed=%s, latest=%s, update_available=%s",
                     self._attr_installed_version,
