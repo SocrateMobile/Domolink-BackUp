@@ -111,6 +111,31 @@ function formatEta(seconds) {
   return `${hourStr}:${remMinStr}:${secStr}`;
 }
 
+function parseSemverJs(versionStr) {
+  if (!versionStr) return [0, 0, 0];
+  const clean = String(versionStr).trim().replace(/^[vV]/, "");
+  const parts = [];
+  const segments = clean.split(".");
+  for (let i = 0; i < segments.length; i++) {
+    const match = segments[i].match(/^\d+/);
+    parts.push(match ? parseInt(match[0], 10) : 0);
+  }
+  return parts;
+}
+
+function isNewerVersion(latestStr, currentStr) {
+  const l = parseSemverJs(latestStr);
+  const c = parseSemverJs(currentStr);
+  const len = Math.max(l.length, c.length);
+  for (let i = 0; i < len; i++) {
+    const lPart = l[i] || 0;
+    const cPart = c[i] || 0;
+    if (lPart > cPart) return true;
+    if (lPart < cPart) return false;
+  }
+  return false;
+}
+
 class DomoLinkBackupPanel extends HTMLElement {
   constructor() {
     super();
@@ -118,7 +143,7 @@ class DomoLinkBackupPanel extends HTMLElement {
     this._hass = null;
     this._data = {};
     this._config = {};
-    this._version = "1.4.6";
+    this._version = "1.5.0";
     this._activeTab = "dashboard";
     this._refreshTimer = null;
     this._showBackupModal = false;
@@ -162,6 +187,14 @@ class DomoLinkBackupPanel extends HTMLElement {
       this._initialFetchDone = true;
       this._fetchData();
       this._scheduleRefresh();
+    }
+    const updateEntity = hass && hass.states && hass.states["update.domolink_backup"];
+    if (updateEntity) {
+      const d = this._data || {};
+      const currentVer = this._version || (updateEntity.attributes && updateEntity.attributes.installed_version) || "1.5.0";
+      const latestVersion = d.latest_version || (updateEntity.attributes && updateEntity.attributes.latest_version) || currentVer;
+      const hasUpdate = Boolean(d.update_available || updateEntity.state === "on" || isNewerVersion(latestVersion, currentVer));
+      this._syncSidebarBadge(hasUpdate);
     }
   }
 
@@ -451,6 +484,203 @@ class DomoLinkBackupPanel extends HTMLElement {
     this._render();
   }
 
+  _syncSidebarBadge(hasUpdate) {
+    try {
+      const ha = document.querySelector("home-assistant");
+      const main = ha && ha.shadowRoot && ha.shadowRoot.querySelector("home-assistant-main");
+      const sidebar = main && main.shadowRoot && main.shadowRoot.querySelector("ha-sidebar");
+      if (!sidebar || !sidebar.shadowRoot) return;
+      const btn = sidebar.shadowRoot.querySelector("#sidebar-panel-domolink_backup") ||
+                  sidebar.shadowRoot.querySelector('paper-icon-item[data-panel="domolink_backup"]') ||
+                  sidebar.shadowRoot.querySelector('a[href="/domolink_backup"]');
+      if (!btn) return;
+
+      let badge = btn.querySelector(".domolink-sidebar-badge");
+      if (hasUpdate) {
+        if (!badge) {
+          badge = document.createElement("span");
+          badge.className = "badge domolink-sidebar-badge";
+          badge.setAttribute("slot", "end");
+          badge.style.cssText = "background: linear-gradient(135deg, #ef4444, #f59e0b); color: white; border-radius: 9999px; padding: 2px 7px; font-size: 10px; font-weight: 800; box-shadow: 0 2px 6px rgba(239,68,68,0.4); margin-left: auto; letter-spacing: 0.5px;";
+          badge.textContent = "MAJ";
+          btn.appendChild(badge);
+        }
+      } else if (badge) {
+        badge.remove();
+      }
+    } catch (e) {
+      // Ignore cross-shadow boundary issues gracefully
+    }
+  }
+
+  _showUpdateModal() {
+    const updateEntity = this._hass && this._hass.states && this._hass.states["update.domolink_backup"];
+    const d = this._data || {};
+    const currentVer = this._version || (updateEntity && updateEntity.attributes && updateEntity.attributes.installed_version) || "1.5.0";
+    const latestVer = d.latest_version || (updateEntity && updateEntity.attributes && updateEntity.attributes.latest_version) || currentVer;
+    const releaseNotes = d.release_notes || (updateEntity && updateEntity.attributes && updateEntity.attributes.release_summary) || "Mise à jour officielle de DomoLink-BackUp.";
+    const releaseUrl = d.release_url || (updateEntity && updateEntity.attributes && updateEntity.attributes.release_url) || `https://github.com/SocrateMobile/Domolink-BackUp/releases/tag/v${latestVer}`;
+
+    const modal = document.createElement("div");
+    modal.id = "domolink-update-modal";
+    modal.style = "position:fixed; inset:0; background:rgba(0,0,0,0.85); backdrop-filter:blur(8px); z-index:999999; display:flex; align-items:center; justify-content:center; padding:16px; overflow-y:auto; cursor:default; font-family:-apple-system,BlinkMacSystemFont,sans-serif;";
+
+    modal.innerHTML = `
+      <div style="background:#1e293b; border:1px solid rgba(245,158,11,0.4); border-radius:18px; width:92vw; max-width:580px; box-shadow:0 25px 60px rgba(0,0,0,0.8); overflow:hidden; display:flex; flex-direction:column; color:#f8fafc;">
+        
+        <!-- Header -->
+        <div style="display:flex; align-items:center; justify-content:space-between; padding:18px 24px; background:linear-gradient(135deg, rgba(245,158,11,0.15), rgba(217,119,6,0.05)); border-bottom:1px solid rgba(245,158,11,0.2);">
+          <div style="display:flex; align-items:center; gap:12px;">
+            <div style="width:40px; height:40px; border-radius:12px; background:linear-gradient(135deg, #f59e0b, #d97706); display:flex; align-items:center; justify-content:center; color:#fff; box-shadow:0 4px 12px rgba(245,158,11,0.4);">
+              <ha-icon icon="mdi:rocket-launch" style="--mdc-icon-size:22px;"></ha-icon>
+            </div>
+            <div>
+              <div style="font-size:16px; font-weight:800; color:#fff;">Mise à jour DomoLink-BackUp</div>
+              <div style="font-size:12px; color:#94a3b8;">Nouvelle version GitHub disponible</div>
+            </div>
+          </div>
+          <button id="modal-close-update" style="background:none; border:none; color:#94a3b8; font-size:22px; cursor:pointer; padding:4px;">✕</button>
+        </div>
+
+        <!-- Body -->
+        <div style="padding:22px 24px; display:flex; flex-direction:column; gap:18px;">
+          <!-- Version Compare Box -->
+          <div style="display:flex; align-items:center; justify-content:space-around; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.08); border-radius:12px; padding:14px;">
+            <div style="text-align:center;">
+              <div style="font-size:11px; color:#94a3b8; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Version installée</div>
+              <div style="font-size:16px; font-weight:800; color:#fff; font-family:monospace;">v${currentVer}</div>
+            </div>
+            <div style="color:#f59e0b; font-size:20px; font-weight:800;">➔</div>
+            <div style="text-align:center;">
+              <div style="font-size:11px; color:#f59e0b; font-weight:600; text-transform:uppercase; margin-bottom:4px;">Nouvelle version</div>
+              <div style="font-size:16px; font-weight:800; color:#10b981; font-family:monospace;">v${latestVer}</div>
+            </div>
+          </div>
+
+          <!-- Changelog -->
+          <div>
+            <div style="font-size:13px; font-weight:700; color:#fff; margin-bottom:8px; display:flex; align-items:center; gap:6px;">
+              <ha-icon icon="mdi:text-box-search-outline" style="--mdc-icon-size:16px; color:#f59e0b;"></ha-icon>
+              Notes de version & Nouveautés GitHub
+            </div>
+            <div style="background:rgba(0,0,0,0.35); border:1px solid rgba(255,255,255,0.08); border-radius:10px; padding:14px; max-height:180px; overflow-y:auto; font-size:12px; color:#cbd5e1; line-height:1.6; white-space:pre-wrap; font-family:-apple-system,BlinkMacSystemFont,sans-serif;">${releaseNotes}</div>
+          </div>
+
+          <!-- Security Alert Note -->
+          <div style="background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.3); border-radius:10px; padding:12px; display:flex; align-items:flex-start; gap:10px;">
+            <ha-icon icon="mdi:information" style="--mdc-icon-size:20px; color:#f59e0b; flex-shrink:0; margin-top:2px;"></ha-icon>
+            <div style="font-size:11.5px; color:#f8fafc; line-height:1.5;">
+              La mise à jour télécharge l'archive officielle depuis GitHub, effectue une copie de sécurité préalable du composant, remplace les fichiers puis <strong>redémarre automatiquement Home Assistant</strong>.
+            </div>
+          </div>
+        </div>
+
+        <!-- Footer -->
+        <div style="display:flex; align-items:center; justify-content:space-between; padding:16px 24px; background:rgba(0,0,0,0.25); border-top:1px solid rgba(255,255,255,0.08);">
+          <a href="${releaseUrl}" target="_blank" rel="noopener" style="font-size:12px; color:#38bdf8; text-decoration:none; display:flex; align-items:center; gap:4px;">
+            <ha-icon icon="mdi:open-in-new" style="--mdc-icon-size:14px;"></ha-icon> Voir sur GitHub
+          </a>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <button id="modal-cancel-update" style="background:#334155; color:#fff; border:none; padding:10px 18px; border-radius:10px; font-weight:700; font-size:12px; cursor:pointer;">Annuler</button>
+            <button id="modal-confirm-update" style="background:linear-gradient(135deg, #f59e0b, #d97706); color:white; border:none; padding:10px 20px; border-radius:10px; font-weight:800; font-size:12px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; box-shadow:0 4px 14px rgba(245,158,11,0.4);">
+              <ha-icon icon="mdi:cloud-download" style="--mdc-icon-size:16px;"></ha-icon> Confirmer et Mettre à jour
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    this.shadowRoot.appendChild(modal);
+    const closeModal = () => modal.remove();
+    modal.querySelector("#modal-close-update")?.addEventListener("click", closeModal);
+    modal.querySelector("#modal-cancel-update")?.addEventListener("click", closeModal);
+    modal.addEventListener("click", (ev) => {
+      if (ev.target === modal) closeModal();
+    });
+
+    modal.querySelector("#modal-confirm-update")?.addEventListener("click", () => {
+      closeModal();
+      this._executeAutoUpdate();
+    });
+  }
+
+  _executeAutoUpdate() {
+    const overlay = document.createElement("div");
+    overlay.id = "domolink-update-progress-overlay";
+    overlay.style = "position:fixed; inset:0; background:rgba(0,0,0,0.92); backdrop-filter:blur(12px); z-index:9999999; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:24px; cursor:wait; font-family:-apple-system,BlinkMacSystemFont,sans-serif;";
+    overlay.innerHTML = `
+      <div style="background:#1e293b; border:1px solid rgba(245,158,11,0.4); border-radius:20px; padding:32px; width:90vw; max-width:480px; text-align:center; box-shadow:0 30px 70px rgba(0,0,0,0.9);">
+        <div style="width:60px; height:60px; border-radius:50%; background:linear-gradient(135deg, #f59e0b, #d97706); margin:0 auto 20px; display:flex; align-items:center; justify-content:center; color:#fff; box-shadow:0 0 24px rgba(245,158,11,0.6); animation:spin-slow 4s linear infinite;">
+          <ha-icon icon="mdi:sync" style="--mdc-icon-size:32px;"></ha-icon>
+        </div>
+        <div style="font-size:18px; font-weight:800; color:#fff; margin-bottom:8px;" id="update-status-title">Mise à jour en cours...</div>
+        <div style="font-size:13px; color:#94a3b8; line-height:1.6; margin-bottom:24px;" id="update-status-desc">
+          Téléchargement de la release GitHub et application des nouveaux fichiers...
+        </div>
+        <div style="width:100%; height:8px; background:rgba(255,255,255,0.1); border-radius:999px; overflow:hidden; margin-bottom:16px;">
+          <div id="update-progress-bar" style="width:25%; height:100%; background:linear-gradient(90deg, #f59e0b, #10b981); border-radius:999px; transition:width 0.4s ease;"></div>
+        </div>
+        <div style="font-size:11px; color:#64748b; font-family:monospace;" id="update-timer-msg">Veuillez patienter sans fermer la page</div>
+      </div>
+    `;
+    this.shadowRoot.appendChild(overlay);
+
+    // Call service or WS
+    try {
+      if (this._hass && this._hass.callService) {
+        this._hass.callService("domolink_backup", "install_update", { backup: true });
+      } else if (this._hass && this._hass.callWS) {
+        this._hass.callWS({ type: "domolink_backup/install_update", backup: true });
+      }
+    } catch (err) {
+      try {
+        this._hass.callWS({ type: "domolink_backup/install_update", backup: true });
+      } catch (e2) {
+        this._hass.callService("update", "install", { entity_id: "update.domolink_backup" });
+      }
+    }
+
+    const progressBar = overlay.querySelector("#update-progress-bar");
+    const statusTitle = overlay.querySelector("#update-status-title");
+    const statusDesc = overlay.querySelector("#update-status-desc");
+    const timerMsg = overlay.querySelector("#update-timer-msg");
+
+    let percent = 25;
+    const progressInterval = setInterval(() => {
+      if (percent < 85) {
+        percent += 15;
+        if (progressBar) progressBar.style.width = percent + "%";
+      }
+    }, 1500);
+
+    setTimeout(() => {
+      clearInterval(progressInterval);
+      if (progressBar) progressBar.style.width = "95%";
+      if (statusTitle) statusTitle.textContent = "Redémarrage de Home Assistant...";
+      if (statusDesc) statusDesc.textContent = "Fichiers installés avec succès ! Reconnexion automatique au serveur en cours...";
+
+      let count = 0;
+      const pollInterval = setInterval(async () => {
+        count++;
+        if (timerMsg) timerMsg.textContent = `Tentative de reconnexion (${count * 2}s)...`;
+        try {
+          const resp = await fetch("/manifest.json", { cache: "no-store" });
+          if (resp.ok) {
+            clearInterval(pollInterval);
+            if (progressBar) progressBar.style.width = "100%";
+            if (statusTitle) statusTitle.textContent = "Mise à jour terminée !";
+            if (statusDesc) statusDesc.textContent = "Rechargement de la page...";
+            setTimeout(() => {
+              window.location.reload();
+            }, 1000);
+          }
+        } catch (e) {
+          // Keep waiting for Home Assistant to reboot
+        }
+      }, 2000);
+    }, 8000);
+  }
+
   _render() {
     const d = this._data || {};
     const cfg = this._config || {};
@@ -507,6 +737,11 @@ class DomoLinkBackupPanel extends HTMLElement {
     const tplPreview = evaluateTemplate(currentTpl, "MANUEL");
 
     const configuredLocalPath = this._localPathInputVal || d.local_backup_path || cfg.local_backup_path || "";
+
+    const updateEntity = this._hass && this._hass.states && this._hass.states["update.domolink_backup"];
+    const currentVer = this._version || (updateEntity && updateEntity.attributes && updateEntity.attributes.installed_version) || "1.5.0";
+    const latestVersion = d.latest_version || (updateEntity && updateEntity.attributes && updateEntity.attributes.latest_version) || currentVer;
+    const hasUpdate = Boolean(d.update_available || (updateEntity && updateEntity.state === "on") || isNewerVersion(latestVersion, currentVer));
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -1249,6 +1484,74 @@ class DomoLinkBackupPanel extends HTMLElement {
           font-size: 12px;
           color: #38bdf8;
         }
+
+        /* Auto-Update Styles */
+        .btn-update-auto {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          background: linear-gradient(135deg, #f59e0b, #d97706);
+          color: #ffffff;
+          border: none;
+          padding: 6px 14px;
+          border-radius: 9999px;
+          font-size: 12px;
+          font-weight: 700;
+          cursor: pointer;
+          box-shadow: 0 2px 10px rgba(245, 158, 11, 0.4);
+          transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+          animation: pulse-glow-btn 2.2s infinite;
+        }
+        .btn-update-auto:hover {
+          transform: translateY(-1px) scale(1.02);
+          box-shadow: 0 4px 14px rgba(245, 158, 11, 0.6);
+        }
+        .btn-update-auto:active {
+          transform: translateY(1px);
+        }
+        .btn-update-auto .update-version-tag {
+          background: rgba(255, 255, 255, 0.25);
+          padding: 1px 6px;
+          border-radius: 6px;
+          font-size: 10px;
+          font-weight: 800;
+        }
+
+        .badge-update-avail {
+          background: linear-gradient(135deg, rgba(245, 158, 11, 0.25), rgba(217, 119, 6, 0.25));
+          color: #fbbf24;
+          border: 1px solid rgba(245, 158, 11, 0.5);
+          padding: 2px 8px;
+          border-radius: 6px;
+          font-size: 11px;
+          font-weight: 700;
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+        }
+
+        .tab-update-badge {
+          background: linear-gradient(135deg, #f59e0b, #ef4444);
+          color: #ffffff;
+          font-size: 10px;
+          font-weight: 800;
+          padding: 2px 6px;
+          border-radius: 999px;
+          margin-left: 6px;
+          box-shadow: 0 1px 6px rgba(239, 68, 68, 0.5);
+          animation: pulse-glow-btn 2s infinite;
+        }
+
+        @keyframes pulse-glow-btn {
+          0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.6); }
+          70% { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+          100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+        }
+
+        @keyframes spin-slow {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
       </style>
 
       <div class="container">
@@ -1258,12 +1561,21 @@ class DomoLinkBackupPanel extends HTMLElement {
             <div class="app-icon">💾</div>
             <div class="title-sub">
               <h1 class="app-title">DomoLink-BackUp</h1>
-              <div class="app-subtitle">Stockage distant & haute sécurité pour Home Assistant • v${this._version}</div>
+              <div class="app-subtitle">Stockage distant & haute sécurité pour Home Assistant • v${currentVer}</div>
             </div>
           </div>
-          <div class="badge-status">
-            <div class="badge-dot"></div>
-            <span>${isBusy ? (d.status || "Opération en cours...") : connState}</span>
+          <div style="display: flex; align-items: center; gap: 12px;">
+            ${hasUpdate ? `
+              <button class="btn-update-auto" id="btn-update-auto" title="Nouvelle mise à jour DomoLink-BackUp disponible">
+                <ha-icon icon="mdi:rocket-launch" style="--mdc-icon-size:16px;"></ha-icon>
+                <span>Mise à jour auto</span>
+                <span class="update-version-tag">v${latestVersion}</span>
+              </button>
+            ` : ''}
+            <div class="badge-status">
+              <div class="badge-dot"></div>
+              <span>${isBusy ? (d.status || "Opération en cours...") : connState}</span>
+            </div>
           </div>
         </div>
 
@@ -1276,7 +1588,7 @@ class DomoLinkBackupPanel extends HTMLElement {
             🗄️ Sauvegardes distantes (${totalBackups})
           </button>
           <button class="tab-button ${this._activeTab === 'config' ? 'active' : ''}" id="tab-cfg">
-            ⚙️ Profil & Modèle
+            ⚙️ Profil & Modèle ${hasUpdate ? `<span class="tab-update-badge">🚀 v${latestVersion}</span>` : ''}
           </button>
           <button class="tab-button ${this._activeTab === 'diagnostics' ? 'active' : ''}" id="tab-diag">
             🧪 Diagnostics & Guide
@@ -1507,6 +1819,30 @@ class DomoLinkBackupPanel extends HTMLElement {
 
         <!-- TAB 3: CONFIGURATION, SCAN LOCAL DISK & TEMPLATE -->
         ${this._activeTab === 'config' ? `
+          ${hasUpdate ? `
+            <!-- Auto-Update Alert Banner -->
+            <div class="card" style="margin-bottom:18px; background:linear-gradient(135deg, rgba(245,158,11,0.12), rgba(217,119,6,0.06)); border:1px solid rgba(245,158,11,0.4); border-radius:14px; padding:16px 20px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:14px; box-shadow:0 4px 16px rgba(245,158,11,0.15);">
+              <div style="display:flex; align-items:center; gap:14px;">
+                <div style="width:44px; height:44px; border-radius:12px; background:linear-gradient(135deg,#f59e0b,#d97706); display:flex; align-items:center; justify-content:center; color:#fff; box-shadow:0 2px 10px rgba(245,158,11,0.4);">
+                  <ha-icon icon="mdi:rocket-launch" style="--mdc-icon-size:24px;"></ha-icon>
+                </div>
+                <div>
+                  <div style="font-size:15px; font-weight:800; color:#f8fafc; display:flex; align-items:center; gap:8px;">
+                    Nouvelle version disponible : v${latestVersion}
+                    <span class="badge-update-avail">Mise à jour prête</span>
+                  </div>
+                  <div style="font-size:12px; color:#94a3b8; margin-top:2px;">
+                    Version actuelle : <strong>v${currentVer}</strong> • Cliquez pour afficher les nouveautés et lancer l'installation
+                  </div>
+                </div>
+              </div>
+              <button class="btn-update-auto" id="btn-config-update-now">
+                <ha-icon icon="mdi:cloud-download" style="--mdc-icon-size:16px;"></ha-icon>
+                Mettre à jour maintenant
+              </button>
+            </div>
+          ` : ''}
+
           <!-- SCAN LOCAL DISK & BACKUP DIRECTORY CARD -->
           <!-- LOCAL BACKUP DIRECTORY SCANNER & CONFIGURATION CARD -->
           <div class="card">
@@ -2006,6 +2342,16 @@ class DomoLinkBackupPanel extends HTMLElement {
     if (tabDiag) tabDiag.onclick = () => this._setTab("diagnostics");
 
     // Action buttons
+    const btnUpdateAuto = root.querySelector("#btn-update-auto");
+    if (btnUpdateAuto) {
+      btnUpdateAuto.onclick = () => this._showUpdateModal();
+    }
+
+    const btnConfigUpdateNow = root.querySelector("#btn-config-update-now");
+    if (btnConfigUpdateNow) {
+      btnConfigUpdateNow.onclick = () => this._showUpdateModal();
+    }
+
     const btnBackup = root.querySelector("#btn-backup-now");
     if (btnBackup) btnBackup.onclick = () => this._openBackupModal();
 
@@ -2403,6 +2749,14 @@ class DomoLinkBackupPanel extends HTMLElement {
         this._deleteBackup(id, name);
       };
     });
+
+    // HA Sidebar Notification Badge Sync
+    const updateEntity = this._hass && this._hass.states && this._hass.states["update.domolink_backup"];
+    const d = this._data || {};
+    const currentVer = this._version || (updateEntity && updateEntity.attributes && updateEntity.attributes.installed_version) || "1.5.0";
+    const latestVersion = d.latest_version || (updateEntity && updateEntity.attributes && updateEntity.attributes.latest_version) || currentVer;
+    const hasUpdate = Boolean(d.update_available || (updateEntity && updateEntity.state === "on") || isNewerVersion(latestVersion, currentVer));
+    this._syncSidebarBadge(hasUpdate);
   }
 }
 
