@@ -2251,7 +2251,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up DomoLink-BackUp from a config entry."""
-    hass.data.setdefault(DOMAIN, {})
+    entry_data = hass.data.setdefault(DOMAIN, {}).setdefault(entry.entry_id, {})
 
     config = {**entry.data, **entry.options}
     storage_engine = DomoLinkStorageEngine(hass, config)
@@ -2259,24 +2259,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     store = Store(hass, STORAGE_VERSION, f"{STORAGE_KEY}_{entry.entry_id}")
 
     coordinator = DomoLinkBackupCoordinator(hass, entry, storage_engine, notifier, store)
-    await coordinator.async_init_load()
 
-    entry_data: dict[str, Any] = {
+    # Store entry data immediately so platforms and background tasks find it safely
+    entry_data.update({
         "storage_engine": storage_engine,
         "notifier": notifier,
         "coordinator": coordinator,
         "entry": entry,
-    }
+    })
+
+    await coordinator.async_init_load()
 
     # Setup BackupAgent if supported
     if HAS_BACKUP_AGENT:
         agent = DomoLinkBackupAgent(hass, entry.entry_id, entry.title)
         entry_data["backup_agent"] = agent
-
-    # Store entry data BEFORE notifying listeners
-    hass.data[DOMAIN][entry.entry_id] = entry_data
-
-    if HAS_BACKUP_AGENT:
         notify_backup_agents_updated(hass)
 
     # ─── Enregistrement du Panneau Frontend dans la Barre Latérale ───
@@ -2426,8 +2423,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # ─── Enregistrement des commandes WebSocket pour le Dashboard UI ───
     _register_websocket_commands(hass)
 
-    # Forward setup to entity platforms
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # First setup core platforms (sensor, button)
+    await hass.config_entries.async_forward_entry_setups(entry, ["sensor", "button"])
+
+    # Then setup dependent platforms (update)
+    remaining_platforms = [p for p in PLATFORMS if p not in ("sensor", "button")]
+    if remaining_platforms:
+        await hass.config_entries.async_forward_entry_setups(entry, remaining_platforms)
 
     # Listen for options changes
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
