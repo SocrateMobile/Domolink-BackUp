@@ -130,7 +130,7 @@ from .storage_engine import DomoLinkStorageEngine
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[str] = ["sensor", "button"]
+PLATFORMS: list[str] = ["sensor", "button", "update"]
 
 BACKUP_ARCHIVE_EXTENSIONS = ("*.tar", "*.tar.gz", "*.tgz")
 
@@ -2398,12 +2398,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         vol.Optional("restore_folders"): [str],
     })
 
+    async def _handle_check_updates(call: ServiceCall) -> None:
+        """Handle manual update check."""
+        for ed in hass.data.get(DOMAIN, {}).values():
+            if isinstance(ed, dict) and "update_entity" in ed:
+                await ed["update_entity"].async_update()
+
+    async def _handle_install_update(call: ServiceCall) -> None:
+        """Handle install update request."""
+        backup = call.data.get("backup", True)
+        for ed in hass.data.get(DOMAIN, {}).values():
+            if isinstance(ed, dict) and "update_entity" in ed:
+                await ed["update_entity"].async_install(backup=backup)
+                break
+
     hass.services.async_register(DOMAIN, SERVICE_CREATE_BACKUP, _handle_create_backup, schema=schema_create)
     hass.services.async_register(DOMAIN, SERVICE_UPLOAD_BACKUP, _handle_upload_backup, schema=schema_upload)
     hass.services.async_register(DOMAIN, SERVICE_RESTORE_BACKUP, _handle_restore_backup, schema=schema_restore)
     hass.services.async_register(DOMAIN, SERVICE_TEST_CONNECTION, _handle_test_connection)
     hass.services.async_register(DOMAIN, SERVICE_CLEAN_OLD_BACKUPS, _handle_clean_old_backups)
     hass.services.async_register(DOMAIN, SERVICE_SYNC_BACKUPS, _handle_sync_backups)
+    if not hass.services.has(DOMAIN, "check_updates"):
+        hass.services.async_register(DOMAIN, "check_updates", _handle_check_updates)
+    if not hass.services.has(DOMAIN, "install_update"):
+        hass.services.async_register(DOMAIN, "install_update", _handle_install_update)
 
     # ─── Enregistrement des commandes WebSocket pour le Dashboard UI ───
     _register_websocket_commands(hass)
@@ -2458,12 +2476,39 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
             {"id": "addons/local", "name": "Extensions locales (/addons/local)"},
         ]
 
+        # Enrich coordinator data with update entity state if available
+        update_info = {
+            "update_available": coordinator.data.get("update_available", False),
+            "latest_version": coordinator.data.get("latest_version", VERSION),
+            "release_notes": coordinator.data.get("release_notes", ""),
+            "release_url": coordinator.data.get("release_url", ""),
+            "installed_version": VERSION,
+        }
+        for ed in hass.data.get(DOMAIN, {}).values():
+            if isinstance(ed, dict) and "update_entity" in ed:
+                ue = ed["update_entity"]
+                if getattr(ue, "installed_version", None):
+                    update_info["installed_version"] = ue.installed_version
+                if getattr(ue, "latest_version", None):
+                    update_info["latest_version"] = ue.latest_version
+                if getattr(ue, "_release_body", None):
+                    update_info["release_notes"] = ue._release_body
+                if getattr(ue, "_attr_release_url", None):
+                    update_info["release_url"] = ue._attr_release_url
+                if getattr(ue, "installed_version", None) and getattr(ue, "latest_version", None):
+                    update_info["update_available"] = (
+                        ue.installed_version != ue.latest_version
+                    )
+                coordinator.data.update(update_info)
+                break
+
         connection.send_result(
             msg["id"],
             {
                 "data": coordinator.data,
                 "config": safe_cfg,
-                "version": VERSION,
+                "version": update_info["installed_version"],
+                "update": update_info,
                 "installed_addons": installed_addons,
                 "available_folders": available_folders,
             },
@@ -2719,6 +2764,42 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
             },
         )
 
+    @websocket_command({vol.Required("type"): "domolink_backup/check_updates"})
+    @async_response
+    async def ws_check_updates(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
+        for ed in hass.data.get(DOMAIN, {}).values():
+            if isinstance(ed, dict) and "update_entity" in ed:
+                await ed["update_entity"].async_update()
+                connection.send_result(
+                    msg["id"],
+                    {
+                        "status": "checked",
+                        "latest_version": ed["update_entity"].latest_version,
+                        "installed_version": ed["update_entity"].installed_version,
+                        "update_available": ed["update_entity"].installed_version != ed["update_entity"].latest_version,
+                    },
+                )
+                return
+        connection.send_result(msg["id"], {"status": "checked", "update_available": False})
+
+    @websocket_command({
+        vol.Required("type"): "domolink_backup/install_update",
+        vol.Optional("backup", default=True): bool,
+    })
+    @async_response
+    async def ws_install_update(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
+        backup = msg.get("backup", True)
+        for ed in hass.data.get(DOMAIN, {}).values():
+            if isinstance(ed, dict) and "update_entity" in ed:
+                create_task = getattr(hass, "async_create_background_task", hass.async_create_task)
+                create_task(
+                    ed["update_entity"].async_install(backup=backup),
+                    name=f"{DOMAIN}_install_update_task",
+                )
+                connection.send_result(msg["id"], {"status": "started"})
+                return
+        connection.send_error(msg["id"], "not_found", "Entité de mise à jour non disponible")
+
     try:
         async_register_command(hass, ws_get_data)
         async_register_command(hass, ws_trigger_backup)
@@ -2730,6 +2811,8 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         async_register_command(hass, ws_clean_backups)
         async_register_command(hass, ws_delete_backup)
         async_register_command(hass, ws_restore_backup)
+        async_register_command(hass, ws_check_updates)
+        async_register_command(hass, ws_install_update)
     except Exception:
         pass
 
@@ -2756,6 +2839,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 SERVICE_CLEAN_OLD_BACKUPS,
                 SERVICE_SYNC_BACKUPS,
                 SERVICE_RESTORE_BACKUP,
+                "check_updates",
+                "install_update",
             ):
                 try:
                     hass.services.async_remove(DOMAIN, svc)

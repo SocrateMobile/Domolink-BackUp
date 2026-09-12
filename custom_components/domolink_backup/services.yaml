@@ -142,3 +142,18 @@ restore_backup:
       description: "Liste des dossiers à restaurer."
       selector:
         object:
+
+check_updates:
+  name: "Vérifier les mises à jour"
+  description: "Interroge GitHub pour vérifier si une nouvelle version officielle de DomoLink-BackUp est disponible."
+
+install_update:
+  name: "Installer la mise à jour"
+  description: "Télécharge et installe automatiquement la dernière version de DomoLink-BackUp depuis GitHub, effectue une sauvegarde de sécurité puis redémarre Home Assistant."
+  fields:
+    backup:
+      name: "Sauvegarde préalable de sécurité"
+      description: "Créer une copie de sécurité du dossier custom_components/domolink_backup avant remplacement."
+      default: true
+      selector:
+        boolean:
