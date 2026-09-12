@@ -2800,21 +2800,25 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
                 return
         connection.send_error(msg["id"], "not_found", "Entité de mise à jour non disponible")
 
-    try:
-        async_register_command(hass, ws_get_data)
-        async_register_command(hass, ws_trigger_backup)
-        async_register_command(hass, ws_save_template)
-        async_register_command(hass, ws_get_template_preview)
-        async_register_command(hass, ws_scan_local_backup_paths)
-        async_register_command(hass, ws_set_local_backup_path)
-        async_register_command(hass, ws_test_connection)
-        async_register_command(hass, ws_clean_backups)
-        async_register_command(hass, ws_delete_backup)
-        async_register_command(hass, ws_restore_backup)
-        async_register_command(hass, ws_check_updates)
-        async_register_command(hass, ws_install_update)
-    except Exception:
-        pass
+    ws_commands = [
+        ws_get_data,
+        ws_trigger_backup,
+        ws_save_template,
+        ws_get_template_preview,
+        ws_scan_local_backup_paths,
+        ws_set_local_backup_path,
+        ws_test_connection,
+        ws_clean_backups,
+        ws_delete_backup,
+        ws_restore_backup,
+        ws_check_updates,
+        ws_install_update,
+    ]
+    for ws_cmd in ws_commands:
+        try:
+            async_register_command(hass, ws_cmd)
+        except Exception:
+            pass
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
