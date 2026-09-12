@@ -84,7 +84,7 @@ async def async_setup_entry(
     )
 
     entry_data["update_entity"] = update_entity
-    async_add_entities([update_entity], True)
+    async_add_entities([update_entity], False)
 
 
 class DomolinkBackupUpdateEntity(UpdateEntity):
@@ -219,7 +219,8 @@ class DomolinkBackupUpdateEntity(UpdateEntity):
                     except Exception:
                         pass
 
-                self.async_write_ha_state()
+                if self.entity_id is not None:
+                    self.async_write_ha_state()
                 _LOGGER.info(
                     "DomoLink-BackUp update check: installed=%s, latest=%s, update_available=%s",
                     self._attr_installed_version,
@@ -273,7 +274,8 @@ class DomolinkBackupUpdateEntity(UpdateEntity):
 
         self._attr_in_progress = True
         self._attr_update_percentage = 10
-        self.async_write_ha_state()
+        if self.entity_id is not None:
+            self.async_write_ha_state()
 
         def _do_download_and_extract() -> None:
             """Synchronous blocking filesystem work executed in executor."""
@@ -347,12 +349,14 @@ class DomolinkBackupUpdateEntity(UpdateEntity):
 
         try:
             self._attr_update_percentage = 30
-            self.async_write_ha_state()
+            if self.entity_id is not None:
+                self.async_write_ha_state()
 
             await self.hass.async_add_executor_job(_do_download_and_extract)
 
             self._attr_update_percentage = 90
-            self.async_write_ha_state()
+            if self.entity_id is not None:
+                self.async_write_ha_state()
 
             # Reset sidebar panel title to default
             self._update_sidebar_panel(False)
@@ -360,7 +364,8 @@ class DomolinkBackupUpdateEntity(UpdateEntity):
             self._attr_update_percentage = 100
             self._attr_installed_version = self._attr_latest_version
             self._attr_in_progress = False
-            self.async_write_ha_state()
+            if self.entity_id is not None:
+                self.async_write_ha_state()
 
             _LOGGER.info("Update complete! Requesting Home Assistant restart...")
             await asyncio.sleep(1)
@@ -371,6 +376,7 @@ class DomolinkBackupUpdateEntity(UpdateEntity):
         except Exception as err:
             self._attr_in_progress = False
             self._attr_update_percentage = None
-            self.async_write_ha_state()
+            if self.entity_id is not None:
+                self.async_write_ha_state()
             _LOGGER.error("DomoLink-BackUp auto-update failed: %s", err, exc_info=True)
             raise
