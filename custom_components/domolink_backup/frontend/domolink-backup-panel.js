@@ -486,28 +486,91 @@ class DomoLinkBackupPanel extends HTMLElement {
 
   _syncSidebarBadge(hasUpdate) {
     try {
+      const isBackupUpdate = Boolean(hasUpdate);
       const ha = document.querySelector("home-assistant");
       const main = ha && ha.shadowRoot && ha.shadowRoot.querySelector("home-assistant-main");
       const sidebar = main && main.shadowRoot && main.shadowRoot.querySelector("ha-sidebar");
       if (!sidebar || !sidebar.shadowRoot) return;
-      const btn = sidebar.shadowRoot.querySelector("#sidebar-panel-domolink_backup") ||
-                  sidebar.shadowRoot.querySelector('paper-icon-item[data-panel="domolink_backup"]') ||
-                  sidebar.shadowRoot.querySelector('a[href="/domolink_backup"]');
-      if (!btn) return;
 
-      let badge = btn.querySelector(".domolink-sidebar-badge");
-      if (hasUpdate) {
-        if (!badge) {
-          badge = document.createElement("span");
-          badge.className = "badge domolink-sidebar-badge";
-          badge.setAttribute("slot", "end");
-          badge.style.cssText = "background: linear-gradient(135deg, #ef4444, #f59e0b); color: white; border-radius: 9999px; padding: 2px 7px; font-size: 10px; font-weight: 800; box-shadow: 0 2px 6px rgba(239,68,68,0.4); margin-left: auto; letter-spacing: 0.5px;";
-          badge.textContent = "MAJ";
-          btn.appendChild(badge);
-        }
-      } else if (badge) {
-        badge.remove();
+      if (!this._sidebarObserverAttached) {
+        this._sidebarObserverAttached = true;
+        try {
+          const obs = new MutationObserver(() => this._syncSidebarBadge(hasUpdate));
+          obs.observe(sidebar.shadowRoot, { childList: true, subtree: true });
+        } catch (e) {}
       }
+
+      const integrations = [
+        {
+          key: "domolink_backup",
+          patterns: ["domolink_backup", "domolink-backup"],
+          entityIds: ["update.domolink_backup", "update.domolink_backup_mise_a_jour"],
+          hasUpdate: isBackupUpdate,
+        },
+        {
+          key: "domolink_alarm",
+          patterns: ["domolink_alarm", "domolink-alarm"],
+          entityIds: ["update.domolink_alarm", "update.domolink_alarm_mise_a_jour"],
+          hasUpdate: undefined,
+        },
+        {
+          key: "domolink_mistral",
+          patterns: ["domolink_mistral", "domolink-mistral"],
+          entityIds: ["update.domolink_mistralia", "update.domolink_mistral", "update.domolink_mistral_mise_a_jour"],
+          hasUpdate: undefined,
+        },
+        {
+          key: "flipr_pool",
+          patterns: ["flipr_pool", "flipr-pool", "flipr-pool-control", "flipr"],
+          entityIds: ["update.flipr_pool_control", "update.flipr_pool", "update.flipr_pool_mise_a_jour"],
+          hasUpdate: undefined,
+        },
+      ];
+
+      const container = sidebar.shadowRoot.querySelector("paper-listbox, ha-md-list, nav, div.menu, div.items");
+      const items = (container || sidebar.shadowRoot).querySelectorAll("paper-icon-item, ha-md-list-item, ha-sidebar-item, a");
+
+      integrations.forEach((integ) => {
+        let isUpdateAvail = integ.hasUpdate;
+        if (isUpdateAvail === undefined && this._hass && this._hass.states) {
+          isUpdateAvail = integ.entityIds.some((id) => {
+            const st = this._hass.states[id];
+            return st && (st.state === "on" || (st.attributes && st.attributes.update_available === true));
+          });
+        }
+
+        for (const item of items) {
+          const href = item.getAttribute("href") || (item.dataset && (item.dataset.panel || item.dataset.href)) || "";
+          const id = item.id || "";
+          const ariaLabel = item.getAttribute("aria-label") || "";
+          const text = (item.textContent || "").toLowerCase();
+
+          const isMatch = integ.patterns.some((pat) => {
+            const p = pat.toLowerCase();
+            return href.toLowerCase().includes(p) ||
+                   id.toLowerCase().includes(p) ||
+                   ariaLabel.toLowerCase().includes(p.replace(/_/g, " ")) ||
+                   (p === "flipr" && text.includes("flipr"));
+          });
+
+          if (isMatch) {
+            let badge = item.querySelector(".domolink-sidebar-badge");
+            if (isUpdateAvail) {
+              if (!badge) {
+                badge = document.createElement("span");
+                badge.className = "badge domolink-sidebar-badge";
+                badge.setAttribute("slot", "end");
+                badge.style.cssText = "background: linear-gradient(135deg, #ef4444, #f59e0b); color: white; border-radius: 9999px; padding: 2px 7px; font-size: 10px; font-weight: 800; box-shadow: 0 2px 6px rgba(239,68,68,0.4); margin-left: auto; letter-spacing: 0.5px; z-index: 10; display: inline-block;";
+                badge.textContent = "MAJ";
+                badge.title = "Mise à jour disponible !";
+                item.appendChild(badge);
+              }
+            } else if (badge) {
+              badge.remove();
+            }
+          }
+        }
+      });
     } catch (e) {
       // Ignore cross-shadow boundary issues gracefully
     }
