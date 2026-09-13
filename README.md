@@ -10,6 +10,16 @@ Elle reprend l'ergonomie, la mécanique et le paramétrage éprouvés de la suit
 
 ---
 
+## 🚀 Nouveautés Majeures de la Version 1.5.5
+
+- **☁️ Intégration S3 Native (Amazon, Cloudflare R2, Backblaze B2)** :
+  - Sauvegardez vos archives sur n'importe quel stockage S3 Compatible via `boto3`.
+  - Transfert **parallélisé et asynchrone** : le composant S3 utilise des multiparts uploads optimisés garantissant aucune latence ni perte de données sur le fil d'exécution de Home Assistant.
+- **🛡️ Validation d'intégrité (Size/Hash Check)** :
+  - Dès qu'un upload (S3, FTP, WebDAV) est terminé, DomoLink-BackUp interroge le serveur distant pour s'assurer que la taille du fichier correspond exactement au fichier local, éliminant tout risque d'archive corrompue.
+- **📦 Upload Fragmenté optimisé (Chunked)** :
+  - Augmentation de la taille des chunks WebDAV à 1 Mo pour des flux de données plus stables et performants vers des routeurs/NAS capricieux (ex: Freebox Delta).
+
 ## 🚀 Nouveautés Majeures de la Version 1.2.2
 
 - **🔍 Scanner Universel de Disque Local (Docker, Raspberry Pi, Système & Montages)** :

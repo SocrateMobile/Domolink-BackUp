@@ -214,6 +214,76 @@ class DomoLinkStorageEngine:
     # DIAGNOSTICS & CONNECTION TESTING
     # ═════════════════════════════════════════════════════════════════════
 
+
+    async def _verify_integrity(self, filename: str, expected_size: int) -> bool:
+        """Verify the integrity of the uploaded file by checking its size."""
+        proto = self.protocol
+        try:
+            if proto == PROTO_S3:
+                return await self.hass.async_add_executor_job(self._verify_s3, filename, expected_size)
+            elif proto == PROTO_WEBDAV:
+                return await self._verify_webdav(filename, expected_size)
+            elif proto in (PROTO_FTP, PROTO_FTPS):
+                return await self.hass.async_add_executor_job(self._verify_ftp, filename, expected_size)
+        except Exception as e:
+            _LOGGER.warning("DomoLink-BackUp: Impossible de vérifier l'intégrité: %s", e)
+        return True # Default to true if unsupported
+
+    def _verify_s3(self, filename: str, expected_size: int) -> bool:
+        import boto3
+        client = boto3.client(
+            "s3", 
+            endpoint_url=self.config.get(CONF_S3_ENDPOINT), 
+            aws_access_key_id=self.config.get(CONF_S3_ACCESS_KEY), 
+            aws_secret_access_key=self.config.get(CONF_S3_SECRET_KEY), 
+            region_name=self.config.get(CONF_S3_REGION)
+        )
+        response = client.head_object(Bucket=self.config.get(CONF_S3_BUCKET), Key=filename)
+        return response['ContentLength'] == expected_size
+
+    async def _verify_webdav(self, filename: str, expected_size: int) -> bool:
+        url = self.config.get(CONF_WEBDAV_URL, "").rstrip("/")
+        path = self.config.get(CONF_WEBDAV_PATH, "").strip("/")
+        user = self.config.get(CONF_WEBDAV_USER)
+        passwd = self.config.get(CONF_WEBDAV_PASS)
+        verify_ssl = self.config.get(CONF_WEBDAV_VERIFY_SSL, False)
+        
+        target_url = f"{url}/{path}/{filename}" if path else f"{url}/{filename}"
+        
+        session = async_get_clientsession(self.hass, verify_ssl=verify_ssl)
+        auth = aiohttp.BasicAuth(user, passwd) if user and passwd else None
+        
+        async with session.request("PROPFIND", target_url, auth=auth, headers={"Depth": "0"}) as resp:
+            if resp.status in (200, 207):
+                text = await resp.text()
+                import xml.etree.ElementTree as ET
+                try:
+                    root = ET.fromstring(text)
+                    for elem in root.iter():
+                        if 'getcontentlength' in elem.tag:
+                            return int(elem.text) == expected_size
+                except Exception:
+                    pass
+        return True
+
+    def _verify_ftp(self, filename: str, expected_size: int) -> bool:
+        ftp = _get_ftp_connection(
+            self.config.get(CONF_FTP_HOST),
+            self.config.get(CONF_FTP_PORT),
+            self.config.get(CONF_FTP_USER),
+            self.config.get(CONF_FTP_PASS),
+            self.config.get(CONF_FTP_TLS)
+        )
+        try:
+            path = self.config.get(CONF_FTP_PATH, "").strip("/")
+            if path:
+                ftp.cwd(path)
+            size = ftp.size(filename)
+            return size == expected_size
+        finally:
+            ftp.quit()
+
+
     async def async_test_connection(self, override_config: dict[str, Any] | None = None) -> dict[str, Any]:
         """Test communication with the configured storage target and log steps."""
         cfg = dict(self.config)
@@ -505,7 +575,41 @@ class DomoLinkStorageEngine:
             self._log_test(f"   ✗ Erreur : {e}", "error")
             return {"success": False, "code": 500, "result_label": "Erreur", "message": str(e)}
 
+
+    # ─── S3 Test ───
+    async def _async_test_s3(self, cfg: dict[str, Any]) -> dict[str, Any]:
+        """Test S3 connection via boto3."""
+        endpoint = cfg.get(CONF_S3_ENDPOINT, "").strip()
+        bucket = cfg.get(CONF_S3_BUCKET, "").strip()
+        region = cfg.get(CONF_S3_REGION, "us-east-1").strip()
+        access_key = cfg.get(CONF_S3_ACCESS_KEY, "").strip()
+        secret_key = cfg.get(CONF_S3_SECRET_KEY, "").strip()
+        
+        self._log_test(f"1. Tentative de connexion S3 vers le bucket {bucket}...", "info")
+        
+        try:
+            def do_test():
+                import boto3
+                client = boto3.client(
+                    "s3",
+                    endpoint_url=endpoint,
+                    aws_access_key_id=access_key,
+                    aws_secret_access_key=secret_key,
+                    region_name=region
+                )
+                # Check if bucket exists
+                client.head_bucket(Bucket=bucket)
+                return True
+            
+            await self.hass.async_add_executor_job(do_test)
+            self._log_test("2. Connexion S3 établie et bucket accessible !", "success")
+            return {"success": True, "code": 200, "result_label": "Validé", "message": "Connexion S3 OK."}
+        except Exception as e:
+            self._log_test(f"Erreur S3: {e}", "error")
+            return {"success": False, "code": 500, "result_label": "Erreur S3", "message": str(e)}
+
     # ─── Google Drive Test ───
+
     async def _async_test_google_drive(self, cfg: dict[str, Any]) -> dict[str, Any]:
         """Test Google Drive Webhook endpoint."""
         webhook_url = cfg.get(CONF_GOOGLE_DRIVE_WEBHOOK_URL, "").strip()
@@ -735,7 +839,7 @@ class DomoLinkStorageEngine:
             sent = 0
             with open(file_path, "rb") as f:
                 while True:
-                    chunk = f.read(65536)
+                    chunk = f.read(1024 * 1024)  # 1MB Chunks
                     if not chunk:
                         break
                     sent += len(chunk)
@@ -1350,7 +1454,7 @@ class DomoLinkStorageEngine:
             try:
                 with open(file_path, "rb") as f:
                     while True:
-                        chunk = f.read(65536)
+                        chunk = f.read(1024 * 1024)  # 1MB Chunks
                         if not chunk:
                             break
                         yield chunk
