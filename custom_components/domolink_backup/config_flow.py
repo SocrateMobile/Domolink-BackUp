@@ -62,6 +62,12 @@ from .const import (
     PROTO_GOOGLE_DRIVE,
     PROTO_LOCAL_SHARE,
     PROTO_WEBDAV,
+    PROTO_S3,
+    CONF_S3_ENDPOINT,
+    CONF_S3_BUCKET,
+    CONF_S3_REGION,
+    CONF_S3_ACCESS_KEY,
+    CONF_S3_SECRET_KEY
 )
 from .storage_engine import DomoLinkStorageEngine
 
@@ -180,6 +186,28 @@ class DomoLinkBackupConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ),
                 vol.Required(CONF_WEBDAV_PATH, default=self.data.get(CONF_WEBDAV_PATH, default_path)): str,
                 vol.Optional(CONF_WEBDAV_VERIFY_SSL, default=bool(self.data.get(CONF_WEBDAV_VERIFY_SSL, False))): bool,
+            }
+
+        elif proto == PROTO_S3:
+            schema_dict = {
+                vol.Required(CONF_S3_ENDPOINT, default=self.data.get(CONF_S3_ENDPOINT, "https://s3.eu-central-003.backblazeb2.com")): str,
+                vol.Required(CONF_S3_BUCKET, default=self.data.get(CONF_S3_BUCKET, "my-home-assistant-backups")): str,
+                vol.Required(CONF_S3_REGION, default=self.data.get(CONF_S3_REGION, "eu-central-003")): str,
+                vol.Required(CONF_S3_ACCESS_KEY, default=self.data.get(CONF_S3_ACCESS_KEY, "")): str,
+                vol.Required(CONF_S3_SECRET_KEY, default=self.data.get(CONF_S3_SECRET_KEY, "")): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                ),
+            }
+
+        elif proto == PROTO_S3:
+            schema_dict = {
+                vol.Required(CONF_S3_ENDPOINT, default=self.options.get(CONF_S3_ENDPOINT, "https://s3.eu-central-003.backblazeb2.com")): str,
+                vol.Required(CONF_S3_BUCKET, default=self.options.get(CONF_S3_BUCKET, "my-home-assistant-backups")): str,
+                vol.Required(CONF_S3_REGION, default=self.options.get(CONF_S3_REGION, "eu-central-003")): str,
+                vol.Required(CONF_S3_ACCESS_KEY, default=self.options.get(CONF_S3_ACCESS_KEY, "")): str,
+                vol.Required(CONF_S3_SECRET_KEY, default=self.options.get(CONF_S3_SECRET_KEY, "")): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                ),
             }
 
         elif proto == PROTO_GOOGLE_DRIVE:
@@ -342,6 +370,28 @@ class DomoLinkBackupOptionsFlow(config_entries.OptionsFlow):
                 ),
                 vol.Required(CONF_WEBDAV_PATH, default=self.options.get(CONF_WEBDAV_PATH) or default_path): str,
                 vol.Optional(CONF_WEBDAV_VERIFY_SSL, default=bool(self.options.get(CONF_WEBDAV_VERIFY_SSL, False))): bool,
+            }
+
+        elif proto == PROTO_S3:
+            schema_dict = {
+                vol.Required(CONF_S3_ENDPOINT, default=self.data.get(CONF_S3_ENDPOINT, "https://s3.eu-central-003.backblazeb2.com")): str,
+                vol.Required(CONF_S3_BUCKET, default=self.data.get(CONF_S3_BUCKET, "my-home-assistant-backups")): str,
+                vol.Required(CONF_S3_REGION, default=self.data.get(CONF_S3_REGION, "eu-central-003")): str,
+                vol.Required(CONF_S3_ACCESS_KEY, default=self.data.get(CONF_S3_ACCESS_KEY, "")): str,
+                vol.Required(CONF_S3_SECRET_KEY, default=self.data.get(CONF_S3_SECRET_KEY, "")): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                ),
+            }
+
+        elif proto == PROTO_S3:
+            schema_dict = {
+                vol.Required(CONF_S3_ENDPOINT, default=self.options.get(CONF_S3_ENDPOINT, "https://s3.eu-central-003.backblazeb2.com")): str,
+                vol.Required(CONF_S3_BUCKET, default=self.options.get(CONF_S3_BUCKET, "my-home-assistant-backups")): str,
+                vol.Required(CONF_S3_REGION, default=self.options.get(CONF_S3_REGION, "eu-central-003")): str,
+                vol.Required(CONF_S3_ACCESS_KEY, default=self.options.get(CONF_S3_ACCESS_KEY, "")): str,
+                vol.Required(CONF_S3_SECRET_KEY, default=self.options.get(CONF_S3_SECRET_KEY, "")): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                ),
             }
 
         elif proto == PROTO_GOOGLE_DRIVE:

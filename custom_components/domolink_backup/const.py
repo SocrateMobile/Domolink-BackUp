@@ -6,7 +6,7 @@ import re
 DOMAIN = "domolink_backup"
 NAME = "DomoLink-BackUp"
 DEFAULT_NAME = "DomoLink-BackUp"
-VERSION = "1.5.4"
+VERSION = "1.5.5"
 
 # Backup and Restore Types
 BACKUP_TYPE_FULL = "full"
@@ -31,6 +31,7 @@ PROTO_FTPS = "ftps"
 PROTO_WEBDAV = "webdav"
 PROTO_GOOGLE_DRIVE = "google_drive"
 PROTO_LOCAL_SHARE = "local_share"
+PROTO_S3 = "s3"
 
 PROTOCOLS = [
     PROTO_FTP,
@@ -38,7 +39,16 @@ PROTOCOLS = [
     PROTO_WEBDAV,
     PROTO_GOOGLE_DRIVE,
     PROTO_LOCAL_SHARE,
+    PROTO_S3,
 ]
+
+# S3 Configuration Keys
+CONF_S3_ENDPOINT = "s3_endpoint"
+CONF_S3_ACCESS_KEY = "s3_access_key"
+CONF_S3_SECRET_KEY = "s3_secret_key"
+CONF_S3_BUCKET = "s3_bucket"
+CONF_S3_REGION = "s3_region"
+
 
 # NAS Types
 NAS_SYNOLOGY = "synology"
