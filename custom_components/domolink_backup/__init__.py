@@ -1042,6 +1042,36 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Fetch remote backups list and refresh statistics."""
         try:
             backups = await self.storage_engine.async_list_backups()
+
+            # Enrich backup dates for slug-only backups from known HA backups if available
+            try:
+                avail = await async_get_available_backups_info(self.hass)
+                known_map: dict[str, str] = {}
+                for b_info in avail.get("supervisor_backups", []) + avail.get("manager_backups", []):
+                    s = b_info.get("slug")
+                    d = b_info.get("date")
+                    if s and d:
+                        known_map[str(s).lower()] = d
+
+                for b in backups:
+                    bid = str(b.get("backup_id", "")).lower()
+                    if bid in known_map and not b.get("date"):
+                        b["date"] = known_map[bid]
+            except Exception as enrich_err:
+                _LOGGER.debug("DomoLink-BackUp: Erreur enrichissement dates: %s", enrich_err)
+
+            # Sort backups newest first
+            def _dt(x):
+                try:
+                    d = datetime.fromisoformat(x.get("date", ""))
+                    if d.tzinfo is None:
+                        d = d.replace(tzinfo=timezone.utc)
+                    return d
+                except Exception:
+                    return datetime.min.replace(tzinfo=timezone.utc)
+
+            backups.sort(key=_dt, reverse=True)
+
             total_bytes = sum(b.get("size", 0) for b in backups)
             total_mb = round(total_bytes / (1024 * 1024), 2)
 
@@ -1051,14 +1081,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.data["destination_label"] = self.storage_engine.destination_label
 
             if backups:
-                # Sort to find most recent
-                def _dt(x):
-                    try:
-                        return datetime.fromisoformat(x.get("date", ""))
-                    except Exception:
-                        return datetime.min.replace(tzinfo=timezone.utc)
-
-                latest = max(backups, key=_dt)
+                latest = backups[0]
                 self.data["last_backup_name"] = latest.get("name", "")
                 self.data["last_backup_date"] = latest.get("date")
                 self.data["last_backup_size_mb"] = round(latest.get("size", 0) / (1024 * 1024), 2)

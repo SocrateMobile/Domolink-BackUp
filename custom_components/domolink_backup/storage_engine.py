@@ -168,6 +168,154 @@ def _ftp_ensure_dir(ftp: ftplib.FTP | ReusedSessionFTP_TLS, path: str) -> None:
                 _LOGGER.warning("DomoLink-BackUp: Impossible d'accéder au sous-dossier FTP '%s' : %s", part, e)
 
 
+def _parse_date_from_filename(filename: str) -> datetime | None:
+    """Extract creation datetime encoded in backup filename.
+
+    Supports:
+    - DD-MM-YYYY_HH[Hh:]MM[:SS] (e.g. 11-09-2026_23H24_BackUp_Home_Assistant_MANUEL.tar)
+    - YYYY-MM-DD_HH[Hh:]MM[:SS] (e.g. 2026-09-11_23H24_... or 2026-09-11T23-24-00)
+    - Compact YYYYMMDD_HHMMSS or YYYYMMDD_HHMM (e.g. HA_20260911_232400.tar)
+    - Date only DD-MM-YYYY or YYYY-MM-DD (defaults to 00:00:00)
+    """
+    clean = os.path.basename(filename)
+
+    # 1. Format FR / DomoLink standard: DD-MM-YYYY with HH[Hh:]MM[:SS]
+    m = re.search(r"(?<!\d)(\d{2})[-_.](\d{2})[-_.](\d{4})[\s_T-]+(\d{2})[Hh:_-](\d{2})(?:[Hh:_-](\d{2}))?", clean)
+    if m:
+        day, month, year, hour, minute = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
+        sec = int(m.group(6)) if m.group(6) else 0
+        if 2000 <= year <= 2099 and 1 <= month <= 12 and 1 <= day <= 31 and 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= sec <= 59:
+            try:
+                return datetime(year, month, day, hour, minute, sec)
+            except ValueError:
+                pass
+
+    # 2. Format ISO: YYYY-MM-DD with HH[Hh:]MM[:SS]
+    m = re.search(r"(?<!\d)(\d{4})[-_.](\d{2})[-_.](\d{2})[\s_T-]+(\d{2})[Hh:_-](\d{2})(?:[Hh:_-](\d{2}))?", clean)
+    if m:
+        year, month, day, hour, minute = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
+        sec = int(m.group(6)) if m.group(6) else 0
+        if 2000 <= year <= 2099 and 1 <= month <= 12 and 1 <= day <= 31 and 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= sec <= 59:
+            try:
+                return datetime(year, month, day, hour, minute, sec)
+            except ValueError:
+                pass
+
+    # 3. Format compact: YYYYMMDD_HHMMSS or YYYYMMDD_HHMM
+    m = re.search(r"(?<!\d)(\d{4})(\d{2})(\d{2})[\s_T-]+(\d{2})(\d{2})(\d{2})?", clean)
+    if m:
+        year, month, day, hour, minute = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4)), int(m.group(5))
+        sec = int(m.group(6)) if m.group(6) else 0
+        if 2000 <= year <= 2099 and 1 <= month <= 12 and 1 <= day <= 31 and 0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= sec <= 59:
+            try:
+                return datetime(year, month, day, hour, minute, sec)
+            except ValueError:
+                pass
+
+    # 4. Date seule: DD-MM-YYYY
+    m = re.search(r"(?<!\d)(\d{2})[-_.](\d{2})[-_.](\d{4})(?!\d)", clean)
+    if m:
+        day, month, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 2000 <= year <= 2099 and 1 <= month <= 12 and 1 <= day <= 31:
+            try:
+                return datetime(year, month, day, 0, 0, 0)
+            except ValueError:
+                pass
+
+    # 5. Date seule: YYYY-MM-DD
+    m = re.search(r"(?<!\d)(\d{4})[-_.](\d{2})[-_.](\d{2})(?!\d)", clean)
+    if m:
+        year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 2000 <= year <= 2099 and 1 <= month <= 12 and 1 <= day <= 31:
+            try:
+                return datetime(year, month, day, 0, 0, 0)
+            except ValueError:
+                pass
+
+    return None
+
+
+def _parse_ftp_list_line_date(parts: list[str]) -> datetime | None:
+    """Extract date from Unix ls -l or DOS ftp LIST output."""
+    months = {
+        "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+        "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+        "janv": 1, "févr": 2, "fevr": 2, "mars": 3, "avr": 4, "mai": 5,
+        "juin": 6, "juil": 7, "août": 8, "aout": 8, "sept": 9, "oct.": 10, "déc": 12, "dec": 12
+    }
+    # Unix ls -l format: parts[5:8] e.g. ["Sep", "11", "23:24"] or ["Sep", "11", "2025"]
+    if len(parts) >= 8:
+        m_str = parts[5].lower().strip(".")
+        d_str = parts[6]
+        ty_str = parts[7]
+        if m_str in months and d_str.isdigit():
+            month = months[m_str]
+            day = int(d_str)
+            now = datetime.now()
+            if ":" in ty_str:
+                time_parts = ty_str.split(":")
+                if len(time_parts) >= 2 and time_parts[0].isdigit() and time_parts[1].isdigit():
+                    h, mi = int(time_parts[0]), int(time_parts[1])
+                    year = now.year
+                    # If parsed month is in the future compared to now, it belongs to previous year
+                    if month > now.month + 1:
+                        year -= 1
+                    try:
+                        return datetime(year, month, day, h, mi, 0)
+                    except ValueError:
+                        pass
+            elif ty_str.isdigit() and len(ty_str) == 4:
+                year = int(ty_str)
+                try:
+                    return datetime(year, month, day, 0, 0, 0)
+                except ValueError:
+                    pass
+
+    # Windows / DOS format: parts[0] = "09-11-26", parts[1] = "11:24PM"
+    if len(parts) >= 3:
+        m_dos = re.match(r"^(\d{2})[-/](\d{2})[-/](\d{2,4})$", parts[0])
+        if m_dos:
+            p1, p2, p3 = int(m_dos.group(1)), int(m_dos.group(2)), int(m_dos.group(3))
+            year = p3 if p3 > 100 else (2000 + p3)
+            month, day = p1, p2
+            t_str = parts[1].upper()
+            hour, minute = 0, 0
+            m_time = re.match(r"^(\d{1,2}):(\d{2})(AM|PM)?$", t_str)
+            if m_time:
+                hour = int(m_time.group(1))
+                minute = int(m_time.group(2))
+                ampm = m_time.group(3)
+                if ampm == "PM" and hour < 12:
+                    hour += 12
+                elif ampm == "AM" and hour == 12:
+                    hour = 0
+            try:
+                return datetime(year, month, day, hour, minute, 0)
+            except ValueError:
+                pass
+
+    return None
+
+
+def _format_backup_iso_date(dt: datetime | None, hass: HomeAssistant | None = None) -> str:
+    """Format datetime into ISO string with timezone."""
+    if dt is None:
+        return datetime.now(timezone.utc).isoformat()
+    if dt.tzinfo is not None:
+        return dt.isoformat()
+    # Apply local HA timezone if naive
+    local_tz = None
+    if hass is not None:
+        try:
+            from homeassistant.util import dt as dt_util
+            local_tz = dt_util.get_time_zone(hass.config.time_zone)
+        except Exception:
+            pass
+    if local_tz is None:
+        local_tz = datetime.now().astimezone().tzinfo or timezone.utc
+    return dt.replace(tzinfo=local_tz).isoformat()
+
+
 class DomoLinkStorageEngine:
     """Multi-destination storage manager for DomoLink-BackUp."""
 
@@ -1010,14 +1158,19 @@ class DomoLinkStorageEngine:
                         for name, facts in ftp.mlsd():
                             if facts.get("type") == "file" and name.endswith((".tar", ".tar.gz", ".zip")):
                                 size = int(facts.get("size", 0))
-                                modify_str = facts.get("modify", "")
-                                try:
-                                    dt = datetime.strptime(modify_str, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
-                                    iso_date = dt.isoformat()
-                                except Exception:
-                                    iso_date = datetime.now(timezone.utc).isoformat()
-
                                 clean_name = os.path.basename(name)
+
+                                # 1. Extract date from filename in priority
+                                dt = _parse_date_from_filename(clean_name)
+                                # 2. Fallback to server modify fact if filename has no date
+                                if dt is None:
+                                    modify_str = facts.get("modify", "")
+                                    try:
+                                        dt = datetime.strptime(modify_str, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+                                    except Exception:
+                                        pass
+
+                                iso_date = _format_backup_iso_date(dt, self.hass)
                                 items.append({
                                     "backup_id": clean_name.removesuffix(".tar.gz").removesuffix(".tar").removesuffix(".zip"),
                                     "name": clean_name,
@@ -1061,21 +1214,31 @@ class DomoLinkStorageEngine:
                                 except (ValueError, TypeError):
                                     pass
 
-                                file_date = datetime.now(timezone.utc).isoformat()
-                                try:
-                                    mdtm_resp = ftp.sendcmd(f"MDTM {clean_name}")
-                                    if mdtm_resp.startswith("213 ") and len(mdtm_resp.strip()) >= 18:
-                                        dt = datetime.strptime(mdtm_resp[4:].strip(), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
-                                        file_date = dt.isoformat()
-                                except Exception:
-                                    pass
+                                # 1. Extract date from filename in priority
+                                dt = _parse_date_from_filename(clean_name)
 
+                                # 2. Try MDTM if filename has no encoded date
+                                if dt is None:
+                                    for target_name in (clean_name, f'"{clean_name}"'):
+                                        try:
+                                            mdtm_resp = ftp.sendcmd(f"MDTM {target_name}")
+                                            if mdtm_resp.startswith("213 ") and len(mdtm_resp.strip()) >= 18:
+                                                dt = datetime.strptime(mdtm_resp[4:].strip(), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+                                                break
+                                        except Exception:
+                                            pass
+
+                                # 3. Parse date from LIST line (Unix ls -l or DOS format)
+                                if dt is None:
+                                    dt = _parse_ftp_list_line_date(parts)
+
+                                iso_date = _format_backup_iso_date(dt, self.hass)
                                 items.append({
                                     "backup_id": clean_name.removesuffix(".tar.gz").removesuffix(".tar").removesuffix(".zip"),
                                     "name": clean_name,
                                     "filename": clean_name,
                                     "size": file_size,
-                                    "date": file_date,
+                                    "date": iso_date,
                                     "protocol": "ftp",
                                 })
 
@@ -1097,20 +1260,28 @@ class DomoLinkStorageEngine:
                                         break
                                 except Exception:
                                     pass
-                            file_date = datetime.now(timezone.utc).isoformat()
-                            try:
-                                mdtm_resp = ftp.sendcmd(f"MDTM {clean_name}")
-                                if mdtm_resp.startswith("213 ") and len(mdtm_resp.strip()) >= 18:
-                                    dt = datetime.strptime(mdtm_resp[4:].strip(), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
-                                    file_date = dt.isoformat()
-                            except Exception:
-                                pass
+
+                            # 1. Extract date from filename in priority
+                            dt = _parse_date_from_filename(clean_name)
+
+                            # 2. Try MDTM if filename has no encoded date
+                            if dt is None:
+                                for target_name in (clean_name, f'"{clean_name}"'):
+                                    try:
+                                        mdtm_resp = ftp.sendcmd(f"MDTM {target_name}")
+                                        if mdtm_resp.startswith("213 ") and len(mdtm_resp.strip()) >= 18:
+                                            dt = datetime.strptime(mdtm_resp[4:].strip(), "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+                                            break
+                                    except Exception:
+                                        pass
+
+                            iso_date = _format_backup_iso_date(dt, self.hass)
                             items.append({
                                 "backup_id": clean_name.removesuffix(".tar.gz").removesuffix(".tar").removesuffix(".zip"),
                                 "name": clean_name,
                                 "filename": clean_name,
                                 "size": size,
-                                "date": file_date,
+                                "date": iso_date,
                                 "protocol": "ftp",
                             })
 
@@ -1176,13 +1347,19 @@ class DomoLinkStorageEngine:
 
                     size = int(response_el.findtext(".//{DAV:}getcontentlength") or 0)
                     last_mod = response_el.findtext(".//{DAV:}getlastmodified") or ""
-                    try:
-                        # RFC 1123 format (e.g. Thu, 10 Sep 2026 12:00:00 GMT)
-                        from email.utils import parsedate_to_datetime
-                        dt = parsedate_to_datetime(last_mod)
-                        iso_date = dt.isoformat()
-                    except Exception:
-                        iso_date = datetime.now(timezone.utc).isoformat()
+
+                    # 1. Extract date from filename in priority
+                    dt = _parse_date_from_filename(filename)
+                    # 2. Fallback to WebDAV getlastmodified
+                    if dt is None and last_mod:
+                        try:
+                            # RFC 1123 format (e.g. Thu, 10 Sep 2026 12:00:00 GMT)
+                            from email.utils import parsedate_to_datetime
+                            dt = parsedate_to_datetime(last_mod)
+                        except Exception:
+                            pass
+
+                    iso_date = _format_backup_iso_date(dt, self.hass)
 
                     items.append({
                         "backup_id": filename.removesuffix(".tar.gz").removesuffix(".tar").removesuffix(".zip"),
@@ -1220,13 +1397,28 @@ class DomoLinkStorageEngine:
                     for b in backups:
                         fname = b.get("name", "")
                         if fname.endswith((".tar", ".tar.gz", ".zip")):
+                            clean_name = fname
+                            dt = _parse_date_from_filename(clean_name)
+                            if dt is not None:
+                                file_date = _format_backup_iso_date(dt, self.hass)
+                            else:
+                                raw_date = b.get("date")
+                                if raw_date:
+                                    try:
+                                        dt_raw = datetime.fromisoformat(raw_date)
+                                        file_date = _format_backup_iso_date(dt_raw, self.hass)
+                                    except Exception:
+                                        file_date = raw_date
+                                else:
+                                    file_date = _format_backup_iso_date(None, self.hass)
+
                             result.append({
                                 "backup_id": fname.removesuffix(".tar.gz").removesuffix(".tar").removesuffix(".zip"),
                                 "drive_file_id": b.get("id"),
                                 "name": fname,
                                 "filename": fname,
                                 "size": int(b.get("size", 0)),
-                                "date": b.get("date", datetime.now(timezone.utc).isoformat()),
+                                "date": file_date,
                                 "protocol": "google_drive",
                             })
                     return result
@@ -1246,13 +1438,17 @@ class DomoLinkStorageEngine:
             for entry in os.scandir(dest_dir):
                 if entry.is_file() and entry.name.endswith((".tar", ".tar.gz", ".zip")):
                     stat = entry.stat()
-                    dt = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                    clean_name = entry.name
+                    dt = _parse_date_from_filename(clean_name)
+                    if dt is None:
+                        dt = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
+                    iso_date = _format_backup_iso_date(dt, self.hass)
                     items.append({
                         "backup_id": entry.name.removesuffix(".tar.gz").removesuffix(".tar").removesuffix(".zip"),
                         "name": entry.name,
                         "filename": entry.name,
                         "size": stat.st_size,
-                        "date": dt.isoformat(),
+                        "date": iso_date,
                         "protocol": "local_share",
                     })
             return items
@@ -1606,7 +1802,10 @@ class DomoLinkStorageEngine:
         # Sort by date, newest first
         def _get_dt(b):
             try:
-                return datetime.fromisoformat(b["date"])
+                d = datetime.fromisoformat(b.get("date", ""))
+                if d.tzinfo is None:
+                    d = d.replace(tzinfo=timezone.utc)
+                return d
             except Exception:
                 return datetime.min.replace(tzinfo=timezone.utc)
 
