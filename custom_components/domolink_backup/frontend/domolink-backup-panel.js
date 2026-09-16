@@ -79,6 +79,37 @@ function roundSize(bytes) {
   return mb.toFixed(1) + " Mo";
 }
 
+function formatBackupDate(b) {
+  if (b && b.date) {
+    const d = new Date(b.date);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleString("fr-FR");
+    }
+  }
+  const fname = (b && (b.name || b.filename)) || "";
+  // 1. Format FR: DD-MM-YYYY_HH[Hh:]MM
+  const m1 = fname.match(/(?:^|[^\d])(\d{2})[-_.](\d{2})[-_.](\d{4})[\s_T-]+(\d{2})[Hh:_-](\d{2})/);
+  if (m1) {
+    return `${m1[1]}/${m1[2]}/${m1[3]} à ${m1[4]}:${m1[5]}`;
+  }
+  // 2. Format ISO: YYYY-MM-DD_HH[Hh:]MM
+  const m2 = fname.match(/(?:^|[^\d])(\d{4})[-_.](\d{2})[-_.](\d{2})[\s_T-]+(\d{2})[Hh:_-](\d{2})/);
+  if (m2) {
+    return `${m2[3]}/${m2[2]}/${m2[1]} à ${m2[4]}:${m2[5]}`;
+  }
+  // 3. Format Date Seule: DD-MM-YYYY
+  const m3 = fname.match(/(?:^|[^\d])(\d{2})[-_.](\d{2})[-_.](\d{4})(?!\d)/);
+  if (m3) {
+    return `${m3[1]}/${m3[2]}/${m3[3]}`;
+  }
+  // 4. Format Date Seule: YYYY-MM-DD
+  const m4 = fname.match(/(?:^|[^\d])(\d{4})[-_.](\d{2})[-_.](\d{2})(?!\d)/);
+  if (m4) {
+    return `${m4[3]}/${m4[2]}/${m4[1]}`;
+  }
+  return "Inconnue";
+}
+
 function formatDuration(seconds) {
   if (!seconds || seconds <= 0) return "0s";
   const s = Math.round(seconds);
@@ -1861,7 +1892,7 @@ class DomoLinkBackupPanel extends HTMLElement {
                   ${backupsList.map(b => `
                     <tr>
                       <td style="font-weight: 600;">${b.name || b.filename}</td>
-                      <td>${b.date ? new Date(b.date).toLocaleString('fr-FR') : 'Inconnue'}</td>
+                      <td>${formatBackupDate(b)}</td>
                       <td>${b.size ? (roundSize(b.size)) : '0 Ko'}</td>
                       <td><span class="tag-proto">${b.protocol || 'ftp'}</span></td>
                       <td style="text-align: right; white-space: nowrap;">
