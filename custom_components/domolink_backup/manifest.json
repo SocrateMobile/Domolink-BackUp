@@ -1,6 +1,10 @@
 {
   "domain": "domolink_backup",
   "name": "DomoLink-BackUp",
+  "after_dependencies": [
+    "backup",
+    "persistent_notification"
+  ],
   "codeowners": [
     "@SocrateMobile"
   ],
@@ -8,10 +12,6 @@
   "dependencies": [
     "frontend",
     "http"
-  ],
-  "after_dependencies": [
-    "backup",
-    "persistent_notification"
   ],
   "documentation": "https://github.com/SocrateMobile/Domolink-BackUp",
   "integration_type": "hub",
@@ -21,5 +21,6 @@
     "boto3>=1.34.0"
   ],
   "single_config_entry": true,
-  "version": "1.5.8"
+  "version": "1.5.9"
 }
+
