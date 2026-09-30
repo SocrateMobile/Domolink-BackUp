@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from datetime import datetime
+import json
+import os
 import re
 
 DOMAIN = "domolink_backup"
 NAME = "DomoLink-BackUp"
 DEFAULT_NAME = "DomoLink-BackUp"
-VERSION = "1.5.9"
+_MANIFEST_PATH = os.path.join(os.path.dirname(__file__), "manifest.json")
+try:
+    with open(_MANIFEST_PATH, "r", encoding="utf-8") as _f:
+        VERSION = json.load(_f).get("version", "unknown")
+except Exception:
+    VERSION = "unknown"
 
 # Backup and Restore Types
 BACKUP_TYPE_FULL = "full"
@@ -93,9 +100,9 @@ DEFAULT_NAS_CONFIGS = {
         "name": "ASUSTOR (ADM)",
         "default_protocol": PROTO_FTP,
         "ftp_port": 21,
-        "ftp_path": "/domolink_backups",
-        "webdav_port": 8001,
-        "webdav_path": "domolink_backups",
+        "ftp_path": "/BackUp/domolink_backups",
+        "webdav_port": 9800,
+        "webdav_path": "BackUp/domolink_backups",
         "webdav_ssl": False,
     },
     NAS_TRUENAS: {

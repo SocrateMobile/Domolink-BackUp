@@ -19,7 +19,7 @@ GITHUB_REPO = f"{REPO_OWNER}/{REPO_NAME}"
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 MANIFEST_PATH = os.path.join(ROOT_DIR, "custom_components", "domolink_backup", "manifest.json")
-CONST_PATH = os.path.join(ROOT_DIR, "custom_components", "domolink_backup", "const.py")
+README_PATH = os.path.join(ROOT_DIR, "README.md")
 
 
 def get_token() -> str:
@@ -46,8 +46,8 @@ def get_token() -> str:
 
 
 def update_version_files(new_ver: str) -> None:
-    """Update version in manifest.json and const.py."""
-    # 1. manifest.json
+    """Update version in manifest.json (SSOT) and README.md badge."""
+    # 1. manifest.json (Single Source of Truth)
     with open(MANIFEST_PATH, "r", encoding="utf-8") as f:
         data = json.load(f)
     data["version"] = new_ver
@@ -56,13 +56,18 @@ def update_version_files(new_ver: str) -> None:
         f.write("\n")
     print(f"Updated {MANIFEST_PATH} -> {new_ver}")
 
-    # 2. const.py
-    with open(CONST_PATH, "r", encoding="utf-8") as f:
-        content = f.read()
-    new_content = re.sub(r'VERSION\s*=\s*"[^"]+"', f'VERSION = "{new_ver}"', content)
-    with open(CONST_PATH, "w", encoding="utf-8") as f:
-        f.write(new_content)
-    print(f"Updated {CONST_PATH} -> {new_ver}")
+    # 2. README.md badge
+    if os.path.exists(README_PATH):
+        with open(README_PATH, "r", encoding="utf-8") as f:
+            readme_content = f.read()
+        readme_content = re.sub(
+            r"badge/version-[^-\s]+-green\.svg",
+            f"badge/version-{new_ver}-green.svg",
+            readme_content,
+        )
+        with open(README_PATH, "w", encoding="utf-8") as f:
+            f.write(readme_content)
+        print(f"Updated {README_PATH} badge -> {new_ver}")
 
 
 def run_cmd(cmd: list[str]) -> None:
@@ -79,7 +84,7 @@ def create_github_release(new_ver: str, release_notes: str, token: str) -> None:
     payload = {
         "tag_name": tag,
         "target_commitish": "main",
-        "name": f"Restart HA {tag} (Latest)",
+        "name": f"DomoLink-BackUp {tag} (Latest)",
         "body": release_notes,
         "draft": False,
         "prerelease": False,
