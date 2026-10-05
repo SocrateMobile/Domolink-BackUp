@@ -8,6 +8,8 @@ Dans la lignée directe de **DomoLink-Alarm** et **DomoLink-Mistral IA**, **Domo
 
 Elle reprend l'ergonomie, la mécanique et le paramétrage éprouvés de la suite DomoLink (profils NAS Asustor, Synology, QNAP, TrueNAS, Freebox, Unraid, transferts FTP/FTPS, WebDAV/Nextcloud, Google Drive sans clé API complexe, alertes Telegram et purge FIFO automatique).
 
+[![Buy Me A Coffee](https://img.buymeacoffee.com/button-api/?text=Buy+me+a+coffee&emoji=☕&slug=Socrate&button_colour=FFDD00&font_colour=000000&font_family=Poppins&outline_colour=000000&coffee_colour=ffffff)](https://www.buymeacoffee.com/Socrate)
+
 ---
 
 ## 🚀 Nouveautés Majeures de la Version 1.5.5
