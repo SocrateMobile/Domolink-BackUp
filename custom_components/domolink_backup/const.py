@@ -8,12 +8,7 @@ import re
 DOMAIN = "domolink_backup"
 NAME = "DomoLink-BackUp"
 DEFAULT_NAME = "DomoLink-BackUp"
-_MANIFEST_PATH = os.path.join(os.path.dirname(__file__), "manifest.json")
-try:
-    with open(_MANIFEST_PATH, "r", encoding="utf-8") as _f:
-        VERSION = json.load(_f).get("version", "unknown")
-except Exception:
-    VERSION = "unknown"
+VERSION = "1.5.9"
 
 # Backup and Restore Types
 BACKUP_TYPE_FULL = "full"

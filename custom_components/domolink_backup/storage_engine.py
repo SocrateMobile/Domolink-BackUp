@@ -46,6 +46,11 @@ from .const import (
     CONF_NAS_TYPE,
     CONF_PROTOCOL,
     CONF_RETENTION_DAYS,
+    CONF_S3_ACCESS_KEY,
+    CONF_S3_BUCKET,
+    CONF_S3_ENDPOINT,
+    CONF_S3_REGION,
+    CONF_S3_SECRET_KEY,
     CONF_WEBDAV_ENABLED,
     CONF_WEBDAV_PASS,
     CONF_WEBDAV_PATH,
@@ -60,11 +65,13 @@ from .const import (
     DEFAULT_NAS_CONFIGS,
     DEFAULT_RETENTION_DAYS,
     DEFAULT_WEBDAV_PATH,
+    NAS_ASUSTOR,
     NAS_GENERIC,
     PROTO_FTP,
     PROTO_FTPS,
     PROTO_GOOGLE_DRIVE,
     PROTO_LOCAL_SHARE,
+    PROTO_S3,
     PROTO_WEBDAV,
 )
 
@@ -389,12 +396,38 @@ class DomoLinkStorageEngine:
         response = client.head_object(Bucket=self.config.get(CONF_S3_BUCKET), Key=filename)
         return response['ContentLength'] == expected_size
 
+    def _get_webdav_verify_ssl(self, url: str, cfg: dict[str, Any] | None = None) -> bool:
+        """Return whether SSL certificate should be strictly verified for WebDAV."""
+        c = cfg or self.config
+        is_local = any(k in str(url) for k in ("192.168.", "10.", "127.0.0.1", "localhost", ".local"))
+        return bool(c.get(CONF_WEBDAV_VERIFY_SSL, False if is_local else True))
+
+    def _get_ftp_path(self, cfg: dict[str, Any] | None = None) -> str:
+        """Return sanitized FTP target directory path."""
+        c = cfg or self.config
+        nas_type = str(c.get(CONF_NAS_TYPE, "")).lower()
+        raw_path = (c.get(CONF_FTP_PATH) or "").strip()
+        if nas_type == NAS_ASUSTOR:
+            if not raw_path or raw_path in ("/", "/domolink_backups", "domolink_backups"):
+                return "/BackUp/domolink_backups"
+        return raw_path or DEFAULT_FTP_PATH
+
+    def _get_webdav_path(self, cfg: dict[str, Any] | None = None) -> str:
+        """Return sanitized WebDAV target directory path."""
+        c = cfg or self.config
+        nas_type = str(c.get(CONF_NAS_TYPE, "")).lower()
+        raw_path = (c.get(CONF_WEBDAV_PATH) or "").strip().strip("/")
+        if nas_type == NAS_ASUSTOR:
+            if not raw_path or raw_path in ("domolink_backups", "/"):
+                return "BackUp/domolink_backups"
+        return raw_path or DEFAULT_WEBDAV_PATH
+
     async def _verify_webdav(self, filename: str, expected_size: int) -> bool:
         url = self.config.get(CONF_WEBDAV_URL, "").rstrip("/")
-        path = self.config.get(CONF_WEBDAV_PATH, "").strip("/")
+        path = self._get_webdav_path().strip("/")
         user = self.config.get(CONF_WEBDAV_USER)
         passwd = self.config.get(CONF_WEBDAV_PASS)
-        verify_ssl = self.config.get(CONF_WEBDAV_VERIFY_SSL, False)
+        verify_ssl = self._get_webdav_verify_ssl(url)
         
         target_url = f"{url}/{path}/{filename}" if path else f"{url}/{filename}"
         
@@ -415,21 +448,25 @@ class DomoLinkStorageEngine:
         return True
 
     def _verify_ftp(self, filename: str, expected_size: int) -> bool:
+        port = int(self.config.get(CONF_FTP_PORT, DEFAULT_FTP_PORT) or DEFAULT_FTP_PORT)
+        use_tls = bool(self.config.get(CONF_FTP_TLS, False) or self.protocol == PROTO_FTPS)
         ftp = _get_ftp_connection(
-            self.config.get(CONF_FTP_HOST),
-            self.config.get(CONF_FTP_PORT),
-            self.config.get(CONF_FTP_USER),
-            self.config.get(CONF_FTP_PASS),
-            self.config.get(CONF_FTP_TLS)
+            self.config.get(CONF_FTP_HOST, ""),
+            port,
+            self.config.get(CONF_FTP_USER, ""),
+            self.config.get(CONF_FTP_PASS, ""),
+            use_tls,
         )
         try:
-            path = self.config.get(CONF_FTP_PATH, "").strip("/")
-            if path:
-                ftp.cwd(path)
+            path = self._get_ftp_path()
+            _ftp_ensure_dir(ftp, path)
             size = ftp.size(filename)
             return size == expected_size
         finally:
-            ftp.quit()
+            try:
+                ftp.quit()
+            except Exception:
+                pass
 
 
     async def async_test_connection(self, override_config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -492,7 +529,9 @@ class DomoLinkStorageEngine:
         port = int(cfg.get(CONF_FTP_PORT, DEFAULT_FTP_PORT) or DEFAULT_FTP_PORT)
         user = cfg.get(CONF_FTP_USER, "").strip()
         passwd = cfg.get(CONF_FTP_PASS, "")
-        path = (cfg.get(CONF_FTP_PATH, DEFAULT_FTP_PATH) or DEFAULT_FTP_PATH).strip()
+        if passwd in (None, "", "••••••••", "••••", "********"):
+            passwd = self.config.get(CONF_FTP_PASS, "")
+        path = self._get_ftp_path(cfg)
         use_tls = bool(cfg.get(CONF_FTP_TLS, False) or cfg.get(CONF_PROTOCOL) == PROTO_FTPS)
 
         if not host:
@@ -588,6 +627,8 @@ class DomoLinkStorageEngine:
                 m = re.search(r"\b([1-5]\d{2})\b", msg)
                 if m:
                     err_code = int(m.group(1))
+                if err_code == 550 and str(cfg.get(CONF_NAS_TYPE, "")).lower() == NAS_ASUSTOR and "BackUp" not in path:
+                    msg += " - Sur ASUSTOR, le chemin doit commencer par un dossier partagé existant (ex: /BackUp/...)"
                 log_step(f"   ✗ Erreur permissions FTP ({err_code}) : {msg}", "error")
                 return {
                     "success": False,
@@ -650,8 +691,10 @@ class DomoLinkStorageEngine:
         url = cfg.get(CONF_WEBDAV_URL, "").strip()
         user = cfg.get(CONF_WEBDAV_USER, "").strip()
         passwd = cfg.get(CONF_WEBDAV_PASS, "").strip()
-        path = (cfg.get(CONF_WEBDAV_PATH, DEFAULT_WEBDAV_PATH) or DEFAULT_WEBDAV_PATH).strip().strip("/")
-        verify_ssl = bool(cfg.get(CONF_WEBDAV_VERIFY_SSL, True))
+        if passwd in (None, "", "••••••••", "••••", "********"):
+            passwd = self.config.get(CONF_WEBDAV_PASS, "").strip()
+        path = self._get_webdav_path(cfg)
+        verify_ssl = self._get_webdav_verify_ssl(url, cfg)
 
         if not url:
             self._log_test("URL WebDAV manquante.", "error")
@@ -701,8 +744,11 @@ class DomoLinkStorageEngine:
                 timeout=aiohttp.ClientTimeout(total=10),
             ) as put_resp:
                 if put_resp.status not in (200, 201, 204):
+                    err_msg = f"Échec écriture (HTTP {put_resp.status})"
+                    if put_resp.status == 403 and (str(cfg.get(CONF_NAS_TYPE, "")).lower() == NAS_ASUSTOR or "BackUp" not in path):
+                        err_msg += " - Sur ASUSTOR, le chemin WebDAV doit commencer par un dossier partagé existant (ex: BackUp/...)"
                     self._log_test(f"   ✗ Échec de téléversement (HTTP {put_resp.status})", "error")
-                    return {"success": False, "code": put_resp.status, "result_label": f"Erreur {put_resp.status}", "message": f"Échec écriture (HTTP {put_resp.status})"}
+                    return {"success": False, "code": put_resp.status, "result_label": f"Erreur {put_resp.status}", "message": err_msg}
 
             # Cleanup probe
             try:
@@ -900,7 +946,7 @@ class DomoLinkStorageEngine:
         port = int(cfg.get(CONF_FTP_PORT, DEFAULT_FTP_PORT) or DEFAULT_FTP_PORT)
         user = cfg.get(CONF_FTP_USER, "")
         passwd = cfg.get(CONF_FTP_PASS, "")
-        path = (cfg.get(CONF_FTP_PATH, DEFAULT_FTP_PATH) or DEFAULT_FTP_PATH).strip()
+        path = self._get_ftp_path(cfg)
         use_tls = bool(cfg.get(CONF_FTP_TLS, False) or self.protocol == PROTO_FTPS)
 
         def _sync_ftp_upload():
@@ -918,7 +964,7 @@ class DomoLinkStorageEngine:
                     total_sent += len(chunk)
                     if on_progress:
                         now_cb = time.monotonic()
-                        if now_cb - last_cb_time >= 1.0 or (file_size > 0 and total_sent >= file_size):
+                        if now_cb - last_cb_time >= 1.0:
                             last_cb_time = now_cb
                             try:
                                 self.hass.loop.call_soon_threadsafe(on_progress, total_sent)
@@ -933,10 +979,10 @@ class DomoLinkStorageEngine:
 
                 if on_progress:
                     try:
-                        self.hass.loop.call_soon_threadsafe(on_progress, file_size or total_sent)
+                        self.hass.loop.call_soon_threadsafe(on_progress, total_sent)
                     except Exception:
                         try:
-                            on_progress(file_size or total_sent)
+                            on_progress(total_sent)
                         except Exception:
                             pass
 
@@ -963,8 +1009,8 @@ class DomoLinkStorageEngine:
         url = cfg.get(CONF_WEBDAV_URL, "").strip().rstrip("/")
         user = cfg.get(CONF_WEBDAV_USER, "").strip()
         passwd = cfg.get(CONF_WEBDAV_PASS, "").strip()
-        path = (cfg.get(CONF_WEBDAV_PATH, DEFAULT_WEBDAV_PATH) or DEFAULT_WEBDAV_PATH).strip().strip("/")
-        verify_ssl = bool(cfg.get(CONF_WEBDAV_VERIFY_SSL, True))
+        path = self._get_webdav_path(cfg)
+        verify_ssl = self._get_webdav_verify_ssl(url, cfg)
 
         session = async_get_clientsession(self.hass, verify_ssl=verify_ssl)
         auth = aiohttp.BasicAuth(user, passwd) if user and passwd else None
@@ -1133,7 +1179,7 @@ class DomoLinkStorageEngine:
         port = int(cfg.get(CONF_FTP_PORT, DEFAULT_FTP_PORT) or DEFAULT_FTP_PORT)
         user = cfg.get(CONF_FTP_USER, "")
         passwd = cfg.get(CONF_FTP_PASS, "")
-        path = (cfg.get(CONF_FTP_PATH, DEFAULT_FTP_PATH) or DEFAULT_FTP_PATH).strip()
+        path = self._get_ftp_path(cfg)
         use_tls = bool(cfg.get(CONF_FTP_TLS, False) or self.protocol == PROTO_FTPS)
 
         def _sync_list():
@@ -1307,8 +1353,8 @@ class DomoLinkStorageEngine:
         url = cfg.get(CONF_WEBDAV_URL, "").strip().rstrip("/")
         user = cfg.get(CONF_WEBDAV_USER, "").strip()
         passwd = cfg.get(CONF_WEBDAV_PASS, "").strip()
-        path = (cfg.get(CONF_WEBDAV_PATH, DEFAULT_WEBDAV_PATH) or DEFAULT_WEBDAV_PATH).strip().strip("/")
-        verify_ssl = bool(cfg.get(CONF_WEBDAV_VERIFY_SSL, True))
+        path = self._get_webdav_path(cfg)
+        verify_ssl = self._get_webdav_verify_ssl(url, cfg)
 
         session = async_get_clientsession(self.hass, verify_ssl=verify_ssl)
         auth = aiohttp.BasicAuth(user, passwd) if user and passwd else None
@@ -1497,7 +1543,7 @@ class DomoLinkStorageEngine:
             port = int(cfg.get(CONF_FTP_PORT, DEFAULT_FTP_PORT) or DEFAULT_FTP_PORT)
             user = cfg.get(CONF_FTP_USER, "")
             passwd = cfg.get(CONF_FTP_PASS, "")
-            path = (cfg.get(CONF_FTP_PATH, DEFAULT_FTP_PATH) or DEFAULT_FTP_PATH).strip()
+            path = self._get_ftp_path(cfg)
             use_tls = bool(cfg.get(CONF_FTP_TLS, False) or proto == PROTO_FTPS)
 
             def _sync_dl():
@@ -1552,8 +1598,8 @@ class DomoLinkStorageEngine:
             url = cfg.get(CONF_WEBDAV_URL, "").strip().rstrip("/")
             user = cfg.get(CONF_WEBDAV_USER, "").strip()
             passwd = cfg.get(CONF_WEBDAV_PASS, "").strip()
-            path = (cfg.get(CONF_WEBDAV_PATH, DEFAULT_WEBDAV_PATH) or DEFAULT_WEBDAV_PATH).strip().strip("/")
-            verify_ssl = bool(cfg.get(CONF_WEBDAV_VERIFY_SSL, True))
+            path = self._get_webdav_path(cfg)
+            verify_ssl = self._get_webdav_verify_ssl(url, cfg)
 
             session = async_get_clientsession(self.hass, verify_ssl=verify_ssl)
             auth = aiohttp.BasicAuth(user, passwd) if user and passwd else None
@@ -1594,7 +1640,7 @@ class DomoLinkStorageEngine:
         port = int(cfg.get(CONF_FTP_PORT, DEFAULT_FTP_PORT) or DEFAULT_FTP_PORT)
         user = cfg.get(CONF_FTP_USER, "")
         passwd = cfg.get(CONF_FTP_PASS, "")
-        path = (cfg.get(CONF_FTP_PATH, DEFAULT_FTP_PATH) or DEFAULT_FTP_PATH).strip()
+        path = self._get_ftp_path(cfg)
         use_tls = bool(cfg.get(CONF_FTP_TLS, False) or self.protocol == PROTO_FTPS)
 
         def _sync_dl():
@@ -1621,8 +1667,8 @@ class DomoLinkStorageEngine:
         url = cfg.get(CONF_WEBDAV_URL, "").strip().rstrip("/")
         user = cfg.get(CONF_WEBDAV_USER, "").strip()
         passwd = cfg.get(CONF_WEBDAV_PASS, "").strip()
-        path = (cfg.get(CONF_WEBDAV_PATH, DEFAULT_WEBDAV_PATH) or DEFAULT_WEBDAV_PATH).strip().strip("/")
-        verify_ssl = bool(cfg.get(CONF_WEBDAV_VERIFY_SSL, True))
+        path = self._get_webdav_path(cfg)
+        verify_ssl = self._get_webdav_verify_ssl(url, cfg)
 
         session = async_get_clientsession(self.hass, verify_ssl=verify_ssl)
         auth = aiohttp.BasicAuth(user, passwd) if user and passwd else None
@@ -1708,7 +1754,7 @@ class DomoLinkStorageEngine:
         port = int(cfg.get(CONF_FTP_PORT, DEFAULT_FTP_PORT) or DEFAULT_FTP_PORT)
         user = cfg.get(CONF_FTP_USER, "")
         passwd = cfg.get(CONF_FTP_PASS, "")
-        path = (cfg.get(CONF_FTP_PATH, DEFAULT_FTP_PATH) or DEFAULT_FTP_PATH).strip()
+        path = self._get_ftp_path(cfg)
         use_tls = bool(cfg.get(CONF_FTP_TLS, False) or self.protocol == PROTO_FTPS)
 
         def _sync_del():
@@ -1738,8 +1784,8 @@ class DomoLinkStorageEngine:
         url = cfg.get(CONF_WEBDAV_URL, "").strip().rstrip("/")
         user = cfg.get(CONF_WEBDAV_USER, "").strip()
         passwd = cfg.get(CONF_WEBDAV_PASS, "").strip()
-        path = (cfg.get(CONF_WEBDAV_PATH, DEFAULT_WEBDAV_PATH) or DEFAULT_WEBDAV_PATH).strip().strip("/")
-        verify_ssl = bool(cfg.get(CONF_WEBDAV_VERIFY_SSL, True))
+        path = self._get_webdav_path(cfg)
+        verify_ssl = self._get_webdav_verify_ssl(url, cfg)
 
         session = async_get_clientsession(self.hass, verify_ssl=verify_ssl)
         auth = aiohttp.BasicAuth(user, passwd) if user and passwd else None
