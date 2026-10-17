@@ -1251,7 +1251,10 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             backup_task = None
             if backup_type == BACKUP_TYPE_PARTIAL:
                 if self.hass.services.has_service("hassio", "backup_partial"):
-                    service_data: dict[str, Any] = {"name": backup_title}
+                    service_data: dict[str, Any] = {
+                        "name": backup_title,
+                        "homeassistant_exclude_database": not bool(include_database),
+                    }
                     if homeassistant is not None:
                         service_data["homeassistant"] = bool(homeassistant)
                     if addons is not None:
@@ -1298,8 +1301,12 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if self.hass.services.has_service("hassio", "backup_full"):
                     _LOGGER.info("DomoLink-BackUp: Appel du service hassio.backup_full ('%s')", backup_title)
                     self.update_progress(STAGE_CREATING_LOCAL, 12, "Service hassio.backup_full", "Création par Supervisor...", log_msg="Service hassio.backup_full déclenché.")
+                    full_service_data = {
+                        "name": backup_title,
+                        "homeassistant_exclude_database": not bool(include_database),
+                    }
                     backup_task = self.hass.async_create_task(
-                        self.hass.services.async_call("hassio", "backup_full", {"name": backup_title}, blocking=True),
+                        self.hass.services.async_call("hassio", "backup_full", full_service_data, blocking=True),
                         name=f"{DOMAIN}_hassio_backup_call",
                     )
                 elif self.hass.services.has_service("backup", "create"):
@@ -2478,7 +2485,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         cfg = {**coordinator.entry.data, **coordinator.entry.options}
         # Mask sensitive passwords before sending to frontend
         safe_cfg = dict(cfg)
-        for secret_key in (CONF_FTP_PASS, CONF_WEBDAV_PASS, CONF_TELEGRAM_TOKEN):
+        for secret_key in (CONF_FTP_PASS, CONF_WEBDAV_PASS, CONF_TELEGRAM_TOKEN, CONF_S3_SECRET_KEY):
             if safe_cfg.get(secret_key):
                 safe_cfg[secret_key] = "********"
 

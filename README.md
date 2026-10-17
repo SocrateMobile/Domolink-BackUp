@@ -1,8 +1,9 @@
 # 💾 DomoLink-BackUp pour Home Assistant
 
 [![HACS Compatible](https://img.shields.io/badge/HACS-Custom-blue.svg)](https://github.com/SocrateMobile/Domolink-BackUp)
-[![Version](https://img.shields.io/badge/version-1.5.9-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
+[![Version](https://img.shields.io/badge/version-1.5.10-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Socrate-FFDD00?logo=buy-me-a-coffee&logoColor=000000)](https://buymeacoffee.com/Socrate)
 
 Dans la lignée directe de **DomoLink-Alarm** et **DomoLink-Mistral IA**, **DomoLink-BackUp** est une intégration Home Assistant puissante et clé en main dédiée au **stockage distant, automatique et sécurisé des sauvegardes de votre domotique**.
 
@@ -184,6 +185,15 @@ action:
 ```
 
 ---
+---
+
+## ☕ Soutenir le projet / Support
+
+Si vous appréciez cette intégration et souhaitez soutenir son développement continu ainsi que la maintenance des futures versions :
+
+<a href="https://buymeacoffee.com/Socrate" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="50" width="210">
+</a>
 
 ## 📄 Licence
 
