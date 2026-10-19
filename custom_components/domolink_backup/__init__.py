@@ -130,7 +130,7 @@ from .storage_engine import DomoLinkStorageEngine
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[str] = ["sensor", "button", "update"]
+PLATFORMS: list[str] = ["sensor", "button"]
 
 BACKUP_ARCHIVE_EXTENSIONS = ("*.tar", "*.tar.gz", "*.tgz")
 
@@ -2535,7 +2535,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
                 "data": coordinator.data,
                 "config": safe_cfg,
                 "version": update_info["installed_version"],
-                "update": update_info,
+                : update_info,
                 "installed_addons": installed_addons,
                 "available_folders": available_folders,
             },
