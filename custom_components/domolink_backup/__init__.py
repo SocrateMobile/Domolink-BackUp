@@ -2333,7 +2333,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                         "module_url": f"/domolink_backup_frontend/domolink-backup-panel.js?v={VERSION}",
                     }
                 },
-                require_admin=False,
+                require_admin=True,
             )
             _LOGGER.info("DomoLink-BackUp: Panneau latéral enregistré avec le titre '%s'", NAME)
         except ValueError:

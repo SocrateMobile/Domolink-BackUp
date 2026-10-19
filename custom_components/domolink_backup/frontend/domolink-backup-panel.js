@@ -1,3 +1,12 @@
+function escapeHtml(str) {
+  if (str === null || str === undefined) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
 /**
  * DomoLink-BackUp Frontend Dashboard Panel
  * Sidebar Title: DomoLink-BackUp
@@ -1891,10 +1900,10 @@ class DomoLinkBackupPanel extends HTMLElement {
                 <tbody>
                   ${backupsList.map(b => `
                     <tr>
-                      <td style="font-weight: 600;">${b.name || b.filename}</td>
+                      <td style="font-weight: 600;">${escapeHtml(b.name || b.filename)}</td>
                       <td>${formatBackupDate(b)}</td>
                       <td>${b.size ? (roundSize(b.size)) : '0 Ko'}</td>
-                      <td><span class="tag-proto">${b.protocol || 'ftp'}</span></td>
+                      <td><span class="tag-proto">${escapeHtml(b.protocol || 'ftp')}</span></td>
                       <td style="text-align: right; white-space: nowrap;">
                         <button class="btn-restore" data-filename="${b.filename || b.name}" data-id="${b.backup_id}">
                           🔄 Restaurer
@@ -1998,7 +2007,7 @@ class DomoLinkBackupPanel extends HTMLElement {
                   <div class="scan-item">
                     <div style="flex: 1;">
                       <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
-                        <span class="scan-path">${r.path}</span>
+                        <span class="scan-path">${escapeHtml(r.path)}</span>
                         ${r.category ? `
                           <span style="display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 11px; font-weight: 600; ${
                             r.category === 'Supervisor' 
@@ -2013,7 +2022,7 @@ class DomoLinkBackupPanel extends HTMLElement {
                         ` : ''}
                       </div>
                       <div class="scan-details">
-                        <b>${r.count} archive(s)</b> • Dernière archive : <code>${r.latest_backup}</code> (${r.latest_size_mb} Mo, le ${r.latest_date})
+                        <b>${r.count} archive(s)</b> • Dernière archive : <code>${escapeHtml(r.latest_backup)}</code> (${r.latest_size_mb} Mo, le ${r.latest_date})
                       </div>
                     </div>
                     <div>
@@ -2022,7 +2031,7 @@ class DomoLinkBackupPanel extends HTMLElement {
                           ✓ Actif
                         </span>
                       ` : `
-                        <button class="btn btn-primary btn-apply-scan-path" data-path="${r.path}" style="padding: 6px 12px; font-size: 12px;">
+                        <button class="btn btn-primary btn-apply-scan-path" data-path="${escapeHtml(r.path)}" style="padding: 6px 12px; font-size: 12px;">
                           ✓ Utiliser ce dossier
                         </button>
                       `}
