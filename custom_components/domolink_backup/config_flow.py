@@ -62,12 +62,6 @@ from .const import (
     PROTO_GOOGLE_DRIVE,
     PROTO_LOCAL_SHARE,
     PROTO_WEBDAV,
-    PROTO_S3,
-    CONF_S3_ENDPOINT,
-    CONF_S3_BUCKET,
-    CONF_S3_REGION,
-    CONF_S3_ACCESS_KEY,
-    CONF_S3_SECRET_KEY
 )
 from .storage_engine import DomoLinkStorageEngine
 
@@ -108,7 +102,6 @@ class DomoLinkBackupConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             selector.SelectOptionDict(value=PROTO_FTP, label="FTP (Standard port 21)"),
             selector.SelectOptionDict(value=PROTO_FTPS, label="FTPS (Sécurisé avec TLS/SSL)"),
             selector.SelectOptionDict(value=PROTO_WEBDAV, label="WebDAV (HTTP / HTTPS)"),
-            selector.SelectOptionDict(value=PROTO_S3, label="S3 / Cloud Objet (Backblaze, AWS, MinIO, Wasabi)"),
             selector.SelectOptionDict(value=PROTO_GOOGLE_DRIVE, label="Google Drive (Webhook)"),
             selector.SelectOptionDict(value=PROTO_LOCAL_SHARE, label="Partage Réseau Local (Dossier partagé)"),
         ]
@@ -189,22 +182,13 @@ class DomoLinkBackupConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_WEBDAV_VERIFY_SSL, default=bool(self.data.get(CONF_WEBDAV_VERIFY_SSL, False))): bool,
             }
 
-        elif proto == PROTO_S3:
-            schema_dict = {
-                vol.Required(CONF_S3_ENDPOINT, default=self.data.get(CONF_S3_ENDPOINT, "https://s3.eu-central-003.backblazeb2.com")): str,
-                vol.Required(CONF_S3_BUCKET, default=self.data.get(CONF_S3_BUCKET, "my-home-assistant-backups")): str,
-                vol.Required(CONF_S3_REGION, default=self.data.get(CONF_S3_REGION, "eu-central-003")): str,
-                vol.Required(CONF_S3_ACCESS_KEY, default=self.data.get(CONF_S3_ACCESS_KEY, "")): str,
-                vol.Required(CONF_S3_SECRET_KEY, default=self.data.get(CONF_S3_SECRET_KEY, "")): selector.TextSelector(
-                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
-                ),
-            }
-
-
         elif proto == PROTO_GOOGLE_DRIVE:
             schema_dict = {
                 vol.Required(CONF_GOOGLE_DRIVE_WEBHOOK_URL, default=self.data.get(CONF_GOOGLE_DRIVE_WEBHOOK_URL, "")): str,
                 vol.Optional(CONF_GOOGLE_DRIVE_FOLDER_ID, default=self.data.get(CONF_GOOGLE_DRIVE_FOLDER_ID, "")): str,
+                vol.Optional(CONF_GOOGLE_DRIVE_SECRET_KEY, default=self.data.get(CONF_GOOGLE_DRIVE_SECRET_KEY, "")): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                ),
             }
 
         elif proto == PROTO_LOCAL_SHARE:
@@ -304,7 +288,6 @@ class DomoLinkBackupOptionsFlow(config_entries.OptionsFlow):
             selector.SelectOptionDict(value=PROTO_FTP, label="FTP (Standard port 21)"),
             selector.SelectOptionDict(value=PROTO_FTPS, label="FTPS (Sécurisé avec TLS/SSL)"),
             selector.SelectOptionDict(value=PROTO_WEBDAV, label="WebDAV (HTTP / HTTPS)"),
-            selector.SelectOptionDict(value=PROTO_S3, label="S3 / Cloud Objet (Backblaze, AWS, MinIO, Wasabi)"),
             selector.SelectOptionDict(value=PROTO_GOOGLE_DRIVE, label="Google Drive (Webhook)"),
             selector.SelectOptionDict(value=PROTO_LOCAL_SHARE, label="Partage Réseau Local (Dossier partagé)"),
         ]
@@ -332,7 +315,7 @@ class DomoLinkBackupOptionsFlow(config_entries.OptionsFlow):
         preset = DEFAULT_NAS_CONFIGS.get(nas_type, {})
 
         if user_input is not None:
-            for pass_key in (CONF_FTP_PASS, CONF_WEBDAV_PASS, CONF_S3_SECRET_KEY, CONF_TELEGRAM_TOKEN):
+            for pass_key in (CONF_FTP_PASS, CONF_WEBDAV_PASS, CONF_GOOGLE_DRIVE_SECRET_KEY, CONF_TELEGRAM_TOKEN):
                 if pass_key in user_input and user_input[pass_key] in (None, "", "••••••••", "••••", "********"):
                     if self.options.get(pass_key):
                         user_input[pass_key] = self.options.get(pass_key)
@@ -375,21 +358,13 @@ class DomoLinkBackupOptionsFlow(config_entries.OptionsFlow):
             }
 
 
-        elif proto == PROTO_S3:
-            schema_dict = {
-                vol.Required(CONF_S3_ENDPOINT, default=self.options.get(CONF_S3_ENDPOINT, "https://s3.eu-central-003.backblazeb2.com")): str,
-                vol.Required(CONF_S3_BUCKET, default=self.options.get(CONF_S3_BUCKET, "my-home-assistant-backups")): str,
-                vol.Required(CONF_S3_REGION, default=self.options.get(CONF_S3_REGION, "eu-central-003")): str,
-                vol.Required(CONF_S3_ACCESS_KEY, default=self.options.get(CONF_S3_ACCESS_KEY, "")): str,
-                vol.Required(CONF_S3_SECRET_KEY, default=self.options.get(CONF_S3_SECRET_KEY, "")): selector.TextSelector(
-                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
-                ),
-            }
-
         elif proto == PROTO_GOOGLE_DRIVE:
             schema_dict = {
                 vol.Required(CONF_GOOGLE_DRIVE_WEBHOOK_URL, default=self.options.get(CONF_GOOGLE_DRIVE_WEBHOOK_URL, "")): str,
                 vol.Optional(CONF_GOOGLE_DRIVE_FOLDER_ID, default=self.options.get(CONF_GOOGLE_DRIVE_FOLDER_ID, "")): str,
+                vol.Optional(CONF_GOOGLE_DRIVE_SECRET_KEY, default=self.options.get(CONF_GOOGLE_DRIVE_SECRET_KEY, "")): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                ),
             }
 
         elif proto == PROTO_LOCAL_SHARE:

@@ -26,10 +26,13 @@ try:
 except ImportError:
     StaticPathConfig = None  # type: ignore[assignment,misc]
 
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.components.websocket_api import (
     ActiveConnection,
     async_register_command,
     async_response,
+    require_admin,
     websocket_command,
 )
 import voluptuous as vol
@@ -64,7 +67,7 @@ from .const import (
     CONF_NAS_TYPE,
     CONF_PROTOCOL,
     CONF_RETENTION_DAYS,
-    CONF_S3_SECRET_KEY,
+    CONF_GOOGLE_DRIVE_SECRET_KEY,
     CONF_TELEGRAM_CHAT_ID,
     CONF_TELEGRAM_ENABLED,
     CONF_TELEGRAM_NOTIFY_ON_ERROR,
@@ -511,87 +514,6 @@ def _sync_find_targeted_or_newest_backup_on_disk(
     return None
 
 
-def _get_supervisor_auth_headers() -> tuple[str, dict[str, str]]:
-    """Retrieve host and authentication headers for Home Assistant Supervisor."""
-    token = os.environ.get("SUPERVISOR_TOKEN") or os.environ.get("HASSIO_TOKEN", "")
-    host = os.environ.get("SUPERVISOR", "supervisor")
-    headers: dict[str, str] = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-        headers["X-Supervisor-Token"] = token
-    return host, headers
-
-
-async def async_query_supervisor(
-    hass: HomeAssistant,
-    endpoint: str,
-    method: str = "GET",
-    json_data: dict[str, Any] | None = None,
-    timeout: float = 10.0,
-) -> dict[str, Any] | None:
-    """Safely communicate with the Home Assistant Supervisor REST API."""
-    host, headers = _get_supervisor_auth_headers()
-    clean_endpoint = "/" + endpoint.lstrip("/")
-    url = f"http://{host}{clean_endpoint}"
-
-    try:
-        from homeassistant.helpers.aiohttp_client import async_get_clientsession
-        session = async_get_clientsession(hass)
-        async with session.request(
-            method,
-            url,
-            headers=headers,
-            json=json_data,
-            timeout=aiohttp.ClientTimeout(total=timeout),
-        ) as resp:
-            if resp.status in (200, 201):
-                return await resp.json()
-            else:
-                _LOGGER.debug("DomoLink-BackUp: Réponse HTTP %s depuis Supervisor (%s)", resp.status, url)
-                return None
-    except Exception as err:
-        _LOGGER.debug("DomoLink-BackUp: Impossible de joindre l'API Supervisor sur %s: %s", url, err)
-        return None
-
-
-async def async_download_supervisor_backup(
-    hass: HomeAssistant,
-    slug: str,
-    target_path: str,
-    timeout: float = 600.0,
-) -> bool:
-    """Download a backup archive directly from Home Assistant Supervisor stream to disk."""
-    host, headers = _get_supervisor_auth_headers()
-    url = f"http://{host}/backups/{slug}/download"
-
-    try:
-        from homeassistant.helpers.aiohttp_client import async_get_clientsession
-        session = async_get_clientsession(hass)
-        async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
-            if resp.status == 200:
-                await hass.async_add_executor_job(lambda: os.makedirs(os.path.dirname(target_path), exist_ok=True))
-                f_out = await hass.async_add_executor_job(open, target_path, "wb")
-                try:
-                    while True:
-                        chunk = await resp.content.read(131072)
-                        if not chunk:
-                            break
-                        await hass.async_add_executor_job(f_out.write, chunk)
-                finally:
-                    await hass.async_add_executor_job(f_out.close)
-                size_bytes = await hass.async_add_executor_job(os.path.getsize, target_path)
-                _LOGGER.info(
-                    "DomoLink-BackUp: Archive '%s' téléchargée depuis Supervisor vers %s (%s octets)",
-                    slug, target_path, size_bytes
-                )
-                return True
-            else:
-                _LOGGER.error("DomoLink-BackUp: Échec téléchargement archive %s depuis Supervisor (HTTP %s)", slug, resp.status)
-                return False
-    except Exception as err:
-        _LOGGER.error("DomoLink-BackUp: Exception lors du téléchargement de l'archive %s depuis Supervisor: %s", slug, err)
-        return False
-
 
 async def async_download_backup_via_manager(
     backup_manager: Any,
@@ -690,71 +612,16 @@ def _sync_extract_core_subfolders(tar_path: str, target_config_dir: str, subfold
     return extracted
 
 
-async def async_upload_backup_to_supervisor(hass: HomeAssistant, tar_path: str) -> bool:
-    """Upload and register a local .tar backup archive into Home Assistant Supervisor."""
-    host, headers = _get_supervisor_auth_headers()
-    url = f"http://{host}/backups/new/upload"
-
-    try:
-        from homeassistant.helpers.aiohttp_client import async_get_clientsession
-        session = async_get_clientsession(hass)
-        data = aiohttp.FormData()
-
-        async def _tar_stream():
-            f = await hass.async_add_executor_job(open, tar_path, "rb")
-            try:
-                while True:
-                    chunk = await hass.async_add_executor_job(f.read, 1024 * 1024)
-                    if not chunk:
-                        break
-                    yield chunk
-            finally:
-                await hass.async_add_executor_job(f.close)
-
-        filename = await hass.async_add_executor_job(os.path.basename, tar_path)
-        data.add_field("file", _tar_stream(), filename=filename, content_type="application/x-tar")
-        async with session.post(url, data=data, headers=headers, timeout=aiohttp.ClientTimeout(total=600)) as resp:
-                if resp.status in (200, 201):
-                    res_json = await resp.json()
-                    _LOGGER.info("DomoLink-BackUp: Archive injectée avec succès dans Supervisor: %s", res_json)
-                    return True
-                else:
-                    _LOGGER.warning("DomoLink-BackUp: Échec upload vers Supervisor /backups/new/upload (HTTP %s)", resp.status)
-                    return False
-    except Exception as err:
-        _LOGGER.warning("DomoLink-BackUp: Exception upload vers Supervisor: %s", err)
-        return False
-
-
 async def async_get_ha_backup_info(hass: HomeAssistant) -> dict[str, Any]:
-    """Query Supervisor and BackupManager for known backup metadata and environment type."""
+    """Query BackupManager for known backup metadata and environment type."""
     info: dict[str, Any] = {
         "supervisor_available": False,
         "supervisor_backups": [],
         "manager_backups": [],
         "known_slugs": set(),
-        "environment": "Core / Docker",
+        "environment": "Home Assistant",
     }
 
-    # 1. Query Supervisor API
-    res = await async_query_supervisor(hass, "/backups")
-    if res and isinstance(res, dict) and "data" in res and "backups" in res["data"]:
-        info["supervisor_available"] = True
-        info["environment"] = "Home Assistant OS / Supervised"
-        for b in res["data"]["backups"]:
-            slug = b.get("slug")
-            if slug:
-                info["known_slugs"].add(str(slug).lower())
-                info["supervisor_backups"].append({
-                    "slug": str(slug),
-                    "name": b.get("name", ""),
-                    "date": b.get("date", ""),
-                    "size": b.get("size", 0),
-                    "type": b.get("type", "full"),
-                    "location": b.get("location"),
-                })
-
-    # 2. Check Core BackupManager
     try:
         from homeassistant.components.backup.const import DATA_MANAGER
         manager = hass.data.get(DATA_MANAGER) or hass.data.get("backup")
@@ -786,20 +653,27 @@ async def async_get_ha_backup_info(hass: HomeAssistant) -> dict[str, Any]:
 
 
 async def async_get_installed_addons(hass: HomeAssistant) -> list[dict[str, Any]]:
-    """Query Supervisor API to retrieve installed add-ons."""
-    res = await async_query_supervisor(hass, "/addons")
-    if res and isinstance(res, dict) and "data" in res and "addons" in res["data"]:
-        addons_list = []
-        for a in res["data"]["addons"]:
-            if a.get("installed", True):
-                addons_list.append({
-                    "slug": str(a.get("slug", "")),
-                    "name": str(a.get("name", a.get("slug", ""))),
-                    "version": str(a.get("version", "")),
-                    "state": str(a.get("state", "")),
-                    "icon": bool(a.get("icon", False)),
-                })
-        return sorted(addons_list, key=lambda x: x["name"].lower())
+    """Retrieve installed add-ons through the public Hassio client or backup manager."""
+    try:
+        from homeassistant.components.hassio import async_get_addons_list
+        res = await async_get_addons_list(hass)
+        if res:
+            return sorted(
+                [
+                    {
+                        "slug": str(a.get("slug", "")),
+                        "name": str(a.get("name", a.get("slug", ""))),
+                        "version": str(a.get("version", "")),
+                        "state": str(a.get("state", "")),
+                        "icon": bool(a.get("icon", False)),
+                    }
+                    for a in res
+                    if a.get("installed", True)
+                ],
+                key=lambda x: x["name"].lower(),
+            )
+    except Exception:
+        pass
     return []
 
 
@@ -1221,7 +1095,6 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         # 3. Check for Home Assistant native BackupManager
         backup_manager = None
-        unsub_manager_events = None
         manager_backups_before = set()
         try:
             from homeassistant.components.backup.const import DATA_MANAGER
@@ -1238,38 +1111,6 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     manager_backups_before = set(mgr_backups.keys())
             except Exception:
                 pass
-
-            if hasattr(backup_manager, "_backup_event_subscriptions"):
-                @callback
-                def _on_backup_event(evt: Any) -> None:
-                    stage = getattr(evt, "stage", None)
-                    if stage:
-                        stage_labels = {
-                            "addon_repositories": "Sauvegarde des dépôts d'add-ons",
-                            "addons": "Sauvegarde des modules complémentaires (add-ons)",
-                            "docker_config": "Sauvegarde de la configuration système",
-                            "home_assistant": "Sauvegarde de HA Core et de la base de données",
-                            "folders": "Sauvegarde des répertoires partagés",
-                            "finishing_file": "Finalisation et compression de l'archive .tar",
-                            "upload_to_agents": "Synchronisation locale",
-                        }
-                        label = stage_labels.get(str(stage), f"Étape : {stage}")
-                        self.update_progress(
-                            STAGE_CREATING_LOCAL,
-                            25,
-                            "Création locale en cours",
-                            label,
-                            log_msg=f"📦 [Home Assistant] {label}",
-                        )
-                try:
-                    backup_manager._backup_event_subscriptions.append(_on_backup_event)
-                    unsub_manager_events = lambda: (
-                        backup_manager._backup_event_subscriptions.remove(_on_backup_event)
-                        if _on_backup_event in backup_manager._backup_event_subscriptions
-                        else None
-                    )
-                except Exception:
-                    pass
 
         tar_path = None
         file_size = 0
@@ -1469,16 +1310,16 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         file_size = os.path.getsize(dl_tar_path)
                         break
 
-                    # Download from Supervisor
-                    if "hassio" in self.hass.config.components or ha_info.get("supervisor_available"):
+                    # Download via BackupManager
+                    if backup_manager:
                         self.update_progress(
                             STAGE_CREATING_LOCAL,
                             42,
-                            "Téléchargement depuis Supervisor",
+                            "Récupération de l'archive",
                             f"Récupération de l'archive {detected_slug}...",
-                            log_msg=f"⬇️ Récupération de l'archive '{detected_slug}' via le flux Supervisor...",
+                            log_msg=f"⬇️ Récupération de l'archive '{detected_slug}' via BackupManager...",
                         )
-                        dl_ok = await async_download_supervisor_backup(self.hass, detected_slug, dl_tar_path)
+                        dl_ok = await async_download_backup_via_manager(backup_manager, detected_slug, dl_tar_path)
                         if dl_ok and os.path.isfile(dl_tar_path) and os.path.getsize(dl_tar_path) > 0:
                             new_file = dl_tar_path
                             file_size = os.path.getsize(dl_tar_path)
@@ -1488,15 +1329,8 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 48,
                                 "Archive récupérée",
                                 f"{round(file_size / (1024*1024), 2)} Mo",
-                                log_msg=f"✓ Archive récupérée avec succès depuis Supervisor ({round(file_size / (1024*1024), 2)} Mo)",
+                                log_msg=f"✓ Archive récupérée avec succès ({round(file_size / (1024*1024), 2)} Mo)",
                             )
-                            break
-                    elif backup_manager:
-                        dl_ok = await async_download_backup_via_manager(backup_manager, detected_slug, dl_tar_path)
-                        if dl_ok and os.path.isfile(dl_tar_path) and os.path.getsize(dl_tar_path) > 0:
-                            new_file = dl_tar_path
-                            file_size = os.path.getsize(dl_tar_path)
-                            self.data["local_backup_path"] = target_dl_dir
                             break
 
                 # Dynamically append newly created directories if any
@@ -1602,32 +1436,30 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         log_msg=f"✓ Archive localisée par scan système : {new_file}",
                     )
 
-            if not new_file and ("hassio" in self.hass.config.components or ha_info.get("supervisor_available")):
-                # Fallback 3: direct download stream from Supervisor API
+            if not new_file and backup_manager:
+                # Fallback 3: direct download stream from BackupManager
                 try:
                     target_slug = detected_slug
-                    if not target_slug:
-                        s_res = await async_query_supervisor(self.hass, "/backups")
-                        if s_res and isinstance(s_res, dict) and "data" in s_res and "backups" in s_res["data"]:
-                            b_list = s_res["data"]["backups"]
-                            for sb in b_list:
-                                if sb.get("slug") and str(sb["slug"]).lower() not in supervisor_slugs_before:
-                                    target_slug = str(sb["slug"])
+                    if not target_slug and hasattr(backup_manager, "async_get_backups"):
+                        mgr_res = await backup_manager.async_get_backups()
+                        raw_mgr = mgr_res[0] if (isinstance(mgr_res, tuple) and mgr_res) else mgr_res
+                        if isinstance(raw_mgr, dict):
+                            for b_id in raw_mgr:
+                                if str(b_id).lower() not in manager_backups_before:
+                                    target_slug = str(b_id)
                                     break
-                            if not target_slug and b_list:
-                                target_slug = str(b_list[0].get("slug", ""))
 
                     if target_slug:
                         self.update_progress(
                             STAGE_CREATING_LOCAL,
                             45,
-                            "Téléchargement depuis Supervisor",
+                            "Téléchargement de l'archive",
                             f"Récupération de l'archive {target_slug}...",
-                            log_msg=f"Flux direct : récupération de l'archive '{target_slug}' via l'API Supervisor...",
+                            log_msg=f"Flux direct : récupération de l'archive '{target_slug}' via BackupManager...",
                         )
                         target_dl_dir = self.hass.config.path("backups")
                         dl_tar_path = os.path.join(target_dl_dir, f"{target_slug}.tar")
-                        dl_ok = await async_download_supervisor_backup(self.hass, target_slug, dl_tar_path)
+                        dl_ok = await async_download_backup_via_manager(backup_manager, target_slug, dl_tar_path)
                         if dl_ok and os.path.isfile(dl_tar_path) and os.path.getsize(dl_tar_path) > 0:
                             new_file = dl_tar_path
                             file_size = os.path.getsize(dl_tar_path)
@@ -1637,10 +1469,10 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 48,
                                 "Archive récupérée",
                                 f"{round(file_size / (1024*1024), 2)} Mo",
-                                log_msg=f"✓ Archive récupérée avec succès depuis Supervisor ({round(file_size / (1024*1024), 2)} Mo)",
+                                log_msg=f"✓ Archive récupérée avec succès ({round(file_size / (1024*1024), 2)} Mo)",
                             )
                 except Exception as dl_err:
-                    _LOGGER.warning("DomoLink-BackUp: Échec téléchargement direct Supervisor: %s", dl_err)
+                    _LOGGER.warning("DomoLink-BackUp: Échec téléchargement via backup manager: %s", dl_err)
 
             if not new_file:
                 raise FileNotFoundError(
@@ -1842,12 +1674,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             await self.notifier.async_notify_error(backup_title, dest_label, user_msg)
             return False
-        finally:
-            if unsub_manager_events:
-                try:
-                    unsub_manager_events()
-                except Exception:
-                    pass
+
 
     async def async_upload_file(self, file_path: str) -> bool:
         """Upload an existing tar archive file to remote destination."""
@@ -2093,19 +1920,20 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 log_msg=f"✓ Archive rapatriée avec succès : {final_mb} Mo (Slug détecté : {internal_slug or 'aucun'})",
             )
 
-            # 3. If Supervisor is available, register / upload it
-            ha_info = await async_get_ha_backup_info(self.hass)
-            if ha_info.get("supervisor_available") or "hassio" in self.hass.config.components:
-                self.update_progress(
-                    STAGE_VERIFYING,
-                    90,
-                    "Enregistrement Supervisor",
-                    "Injection de l'archive dans Home Assistant...",
-                    log_msg="Enregistrement de l'archive dans le gestionnaire Supervisor...",
-                )
-                sup_ok = await async_upload_backup_to_supervisor(self.hass, local_dest)
-                if sup_ok:
-                    _LOGGER.info("DomoLink-BackUp: Archive '%s' injectée dans Supervisor.", clean_filename)
+            # 3. Reload Home Assistant backups so the downloaded file is discovered
+            if self.hass.services.has_service("hassio", "backup_reload"):
+                try:
+                    await self.hass.services.async_call("hassio", "backup_reload", {}, blocking=True)
+                except Exception as reload_err:
+                    _LOGGER.debug("DomoLink-BackUp: Erreur rechargement hassio backup: %s", reload_err)
+            else:
+                try:
+                    from homeassistant.components.backup.const import DATA_MANAGER
+                    b_mgr = self.hass.data.get(DATA_MANAGER) or self.hass.data.get("backup")
+                    if b_mgr and hasattr(b_mgr, "async_load_backups"):
+                        await b_mgr.async_load_backups()
+                except Exception as load_err:
+                    _LOGGER.debug("DomoLink-BackUp: Erreur rechargement BackupManager: %s", load_err)
 
             # Also ensure a copy exists with {internal_slug}.tar if slug is known
             if internal_slug and internal_slug != clean_filename.removesuffix(".tar"):
@@ -2400,8 +2228,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     async def _handle_upload_backup(call: ServiceCall) -> None:
         file_path = call.data.get("file_path")
-        if file_path:
-            await coordinator.async_upload_file(file_path)
+        if not file_path:
+            return
+        resolved_file = await hass.async_add_executor_job(os.path.realpath, file_path)
+        candidate_dirs = await hass.async_add_executor_job(coordinator._get_candidate_backup_dirs)
+        resolved_dirs = [
+            await hass.async_add_executor_job(os.path.realpath, d)
+            for d in candidate_dirs
+        ]
+        resolved_dirs.append(await hass.async_add_executor_job(os.path.realpath, hass.config.path("backups")))
+        is_safe = any(
+            resolved_file == d or resolved_file.startswith(d + os.sep)
+            for d in resolved_dirs
+        )
+        if not is_safe:
+            _LOGGER.error("DomoLink-BackUp: upload_backup rejeté, chemin hors du répertoire de sauvegardes : %s", file_path)
+            raise HomeAssistantError(f"Le fichier doit être situé dans un répertoire de sauvegarde autorisé : {file_path}")
+        await coordinator.async_upload_file(resolved_file)
 
     async def _handle_restore_backup(call: ServiceCall) -> None:
         filename = call.data.get("filename")
@@ -2460,12 +2303,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         vol.Optional("restore_folders"): [str],
     })
 
-    hass.services.async_register(DOMAIN, SERVICE_CREATE_BACKUP, _handle_create_backup, schema=schema_create)
-    hass.services.async_register(DOMAIN, SERVICE_UPLOAD_BACKUP, _handle_upload_backup, schema=schema_upload)
-    hass.services.async_register(DOMAIN, SERVICE_RESTORE_BACKUP, _handle_restore_backup, schema=schema_restore)
-    hass.services.async_register(DOMAIN, SERVICE_TEST_CONNECTION, _handle_test_connection)
-    hass.services.async_register(DOMAIN, SERVICE_CLEAN_OLD_BACKUPS, _handle_clean_old_backups)
-    hass.services.async_register(DOMAIN, SERVICE_SYNC_BACKUPS, _handle_sync_backups)
+    async_register_admin_service(hass, DOMAIN, SERVICE_CREATE_BACKUP, _handle_create_backup, schema=schema_create)
+    async_register_admin_service(hass, DOMAIN, SERVICE_UPLOAD_BACKUP, _handle_upload_backup, schema=schema_upload)
+    async_register_admin_service(hass, DOMAIN, SERVICE_RESTORE_BACKUP, _handle_restore_backup, schema=schema_restore)
+    async_register_admin_service(hass, DOMAIN, SERVICE_TEST_CONNECTION, _handle_test_connection)
+    async_register_admin_service(hass, DOMAIN, SERVICE_CLEAN_OLD_BACKUPS, _handle_clean_old_backups)
+    async_register_admin_service(hass, DOMAIN, SERVICE_SYNC_BACKUPS, _handle_sync_backups)
 
     # ─── Enregistrement des commandes WebSocket pour le Dashboard UI ───
     _register_websocket_commands(hass)
@@ -2492,6 +2335,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
     """Register WebSocket API handlers for the frontend dashboard panel."""
 
     @websocket_command({vol.Required("type"): "domolink_backup/get_data"})
+    @require_admin
     @async_response
     async def ws_get_data(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
         coordinator = _get_active_coordinator(hass)
@@ -2502,7 +2346,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         cfg = {**coordinator.entry.data, **coordinator.entry.options}
         # Mask sensitive passwords before sending to frontend
         safe_cfg = dict(cfg)
-        for secret_key in (CONF_FTP_PASS, CONF_WEBDAV_PASS, CONF_TELEGRAM_TOKEN, CONF_S3_SECRET_KEY):
+        for secret_key in (CONF_FTP_PASS, CONF_WEBDAV_PASS, CONF_TELEGRAM_TOKEN, CONF_GOOGLE_DRIVE_SECRET_KEY):
             if safe_cfg.get(secret_key):
                 safe_cfg[secret_key] = "********"
 
@@ -2541,6 +2385,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         vol.Optional("addons"): [str],
         vol.Optional("folders"): [str],
     })
+    @require_admin
     @async_response
     async def ws_trigger_backup(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
         coordinator = _get_active_coordinator(hass)
@@ -2579,6 +2424,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         vol.Required("type"): "domolink_backup/save_template",
         vol.Required("template"): str,
     })
+    @require_admin
     @async_response
     async def ws_save_template(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
         coordinator = _get_active_coordinator(hass)
@@ -2608,6 +2454,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         vol.Optional("template"): str,
         vol.Optional("mode", default="MANUEL"): str,
     })
+    @require_admin
     @callback
     def ws_get_template_preview(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
         coordinator = _get_active_coordinator(hass)
@@ -2619,6 +2466,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         connection.send_result(msg["id"], {"title": title, "safe_filename": fname})
 
     @websocket_command({vol.Required("type"): "domolink_backup/test_connection"})
+    @require_admin
     @async_response
     async def ws_test_connection(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
         coordinator = _get_active_coordinator(hass)
@@ -2629,6 +2477,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         connection.send_result(msg["id"], res)
 
     @websocket_command({vol.Required("type"): "domolink_backup/clean_backups"})
+    @require_admin
     @async_response
     async def ws_clean_backups(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
         coordinator = _get_active_coordinator(hass)
@@ -2642,6 +2491,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         vol.Required("type"): "domolink_backup/delete_backup",
         vol.Required("backup_id"): str,
     })
+    @require_admin
     @async_response
     async def ws_delete_backup(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
         coordinator = _get_active_coordinator(hass)
@@ -2665,6 +2515,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         vol.Optional("restore_addons"): [str],
         vol.Optional("restore_folders"): [str],
     })
+    @require_admin
     @async_response
     async def ws_restore_backup(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
         coordinator = _get_active_coordinator(hass)
@@ -2699,6 +2550,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         vol.Required("type"): "domolink_backup/scan_local_backup_paths",
         vol.Optional("extra_roots"): [str],
     })
+    @require_admin
     @async_response
     async def ws_scan_local_backup_paths(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
         coordinator = _get_active_coordinator(hass)
@@ -2761,6 +2613,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         vol.Required("type"): "domolink_backup/set_local_backup_path",
         vol.Required("path"): str,
     })
+    @require_admin
     @callback
     def ws_set_local_backup_path(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
         coordinator = _get_active_coordinator(hass)
@@ -2782,6 +2635,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         )
 
     @websocket_command({vol.Required("type"): "domolink_backup/check_updates"})
+    @require_admin
     @async_response
     async def ws_check_updates(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
         connection.send_result(
@@ -2798,6 +2652,7 @@ def _register_websocket_commands(hass: HomeAssistant) -> None:
         vol.Required("type"): "domolink_backup/install_update",
         vol.Optional("backup", default=True): bool,
     })
+    @require_admin
     @async_response
     async def ws_install_update(hass: HomeAssistant, connection: ActiveConnection, msg: dict[str, Any]) -> None:
         connection.send_result(msg["id"], {"status": "hacs_managed", "message": "Updates are managed via HACS"})

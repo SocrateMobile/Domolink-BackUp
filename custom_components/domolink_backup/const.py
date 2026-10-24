@@ -11,9 +11,9 @@ DEFAULT_NAME = NAME
 _MANIFEST_PATH = os.path.join(os.path.dirname(__file__), "manifest.json")
 try:
     with open(_MANIFEST_PATH, "r", encoding="utf-8") as _f:
-        VERSION = json.load(_f).get("version", "1.5.12")
+        VERSION = json.load(_f).get("version", "1.5.15")
 except Exception:
-    VERSION = "1.5.12"
+    VERSION = "1.5.15"
 
 # Backup and Restore Types
 BACKUP_TYPE_FULL = "full"
@@ -38,7 +38,6 @@ PROTO_FTPS = "ftps"
 PROTO_WEBDAV = "webdav"
 PROTO_GOOGLE_DRIVE = "google_drive"
 PROTO_LOCAL_SHARE = "local_share"
-PROTO_S3 = "s3"
 
 PROTOCOLS = [
     PROTO_FTP,
@@ -46,15 +45,7 @@ PROTOCOLS = [
     PROTO_WEBDAV,
     PROTO_GOOGLE_DRIVE,
     PROTO_LOCAL_SHARE,
-    PROTO_S3,
 ]
-
-# S3 Configuration Keys
-CONF_S3_ENDPOINT = "s3_endpoint"
-CONF_S3_ACCESS_KEY = "s3_access_key"
-CONF_S3_SECRET_KEY = "s3_secret_key"
-CONF_S3_BUCKET = "s3_bucket"
-CONF_S3_REGION = "s3_region"
 
 
 # NAS Types
@@ -299,7 +290,11 @@ GOOGLE_APPS_SCRIPT_TEMPLATE = """/**
  * Déployer en tant qu'Application Web :
  * - Exécuter en tant que : Moi (votre adresse Gmail)
  * - Qui a accès : Tout le monde (Anyone)
+ *
+ * SÉCURITÉ : Renseignez la clé secrète ci-dessous et saisissez la même dans Home Assistant.
  */
+var SHARED_SECRET = "CHANGE_ME_SECRET";
+
 function doPost(e) {
   try {
     if (!e || !e.postData || !e.postData.contents) {
@@ -312,17 +307,16 @@ function doPost(e) {
 
     var data = JSON.parse(e.postData.contents);
 
-    // 1. Sonde de test diagnostic DomoLink-BackUp
-    if (data.probe === true) {
+    // Vérification du secret partagé sur chaque requête
+    if (!data.secret || data.secret !== SHARED_SECRET) {
       return ContentService.createTextOutput(JSON.stringify({
-        success: true,
-        code: 200,
-        message: "Connexion Google Drive validée avec succès.",
-        folder_name: "DomoLink-BackUp"
+        success: false,
+        code: 401,
+        message: "Secret partagé invalide ou absent."
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // 2. Dossier cible
+    // Dossier cible
     var folderId = data.folder_id || "";
     var folder;
     if (folderId && folderId.trim() !== "") {
@@ -341,7 +335,17 @@ function doPost(e) {
       }
     }
 
-    // 3. Action : Lister les sauvegardes
+    // 1. Sonde de test diagnostic DomoLink-BackUp
+    if (data.probe === true) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true,
+        code: 200,
+        message: "Connexion Google Drive validée avec succès.",
+        folder_name: folder.getName()
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // 2. Action : Lister les sauvegardes
     if (data.action === "list") {
       var files = folder.getFiles();
       var list = [];
@@ -361,18 +365,40 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // 4. Action : Supprimer une sauvegarde
+    // 3. Action : Supprimer une sauvegarde (strictement limitée au dossier de sauvegarde)
     if (data.action === "delete") {
+      if (!data.file_id) {
+        return ContentService.createTextOutput(JSON.stringify({
+          success: false,
+          code: 400,
+          message: "ID de fichier manquant."
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
       var fileToDelete = DriveApp.getFileById(data.file_id);
+      var parents = fileToDelete.getParents();
+      var inFolder = false;
+      while (parents.hasNext()) {
+        if (parents.next().getId() === folder.getId()) {
+          inFolder = true;
+          break;
+        }
+      }
+      if (!inFolder) {
+        return ContentService.createTextOutput(JSON.stringify({
+          success: false,
+          code: 403,
+          message: "Suppression refusée : le fichier n'appartient pas au dossier de sauvegarde DomoLink-BackUp."
+        })).setMimeType(ContentService.MimeType.JSON);
+      }
       fileToDelete.setTrashed(true);
       return ContentService.createTextOutput(JSON.stringify({
         success: true,
         code: 200,
-        message: "Fichier supprimé."
+        message: "Fichier supprimé du dossier de sauvegarde."
       })).setMimeType(ContentService.MimeType.JSON);
     }
 
-    // 5. Téléversement de fichier (Base64)
+    // 4. Téléversement de fichier (Base64)
     if (!data.filename || !data.file_content) {
       return ContentService.createTextOutput(JSON.stringify({
         success: false,

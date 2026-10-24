@@ -1,7 +1,7 @@
 # 💾 DomoLink-BackUp pour Home Assistant
 
 [![HACS Compatible](https://img.shields.io/badge/HACS-Custom-blue.svg)](https://github.com/SocrateMobile/Domolink-BackUp)
-[![Version](https://img.shields.io/badge/version-1.5.12-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
+[![Version](https://img.shields.io/badge/version-1.5.15-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Socrate-FFDD00?logo=buy-me-a-coffee&logoColor=000000)](https://buymeacoffee.com/Socrate)
 
@@ -12,6 +12,16 @@ Elle reprend l'ergonomie, la mécanique et le paramétrage éprouvés de la suit
 [![Buy Me A Coffee](https://img.buymeacoffee.com/button-api/?text=Buy+me+a+coffee&emoji=☕&slug=Socrate&button_colour=FFDD00&font_colour=000000&font_family=Poppins&outline_colour=000000&coffee_colour=ffffff)](https://www.buymeacoffee.com/Socrate)
 
 ---
+
+## 🚀 Nouveautés Majeures de la Version 1.5.15
+
+- **🛡️ Sécurité & Conformité HACS Totale** :
+  - **Services Administrateur Stricts** : Enregistrement de tous les services via `async_register_admin_service` et sécurisation de toutes les commandes WebSocket avec `@require_admin`.
+  - **Isolation du Répertoire de Sauvegardes** : Restriction stricte de `upload_backup` aux répertoires de sauvegardes autorisés de Home Assistant pour prévenir tout accès arbitraire.
+  - **Sécurisation Google Apps Script & Google Drive** : Vérification systématique d'une clé secrète partagée sur chaque requête et restriction de la suppression de fichiers au dossier de sauvegarde.
+  - **Protection XSS & Échappement HTML** : Échappement systématique (`escapeHtml`) de toutes les données dynamiques dans le panneau d'administration (journaux, rapports, statuts, attributs `data-*`, modales).
+  - **API Publiques Home Assistant Exclusives** : Suppression des appels REST directs avec `SUPERVISOR_TOKEN` et des hooks privés au profit des services publics `hassio` et `backup` et de l'agent `BackupAgent`.
+  - **I/O Asynchrone dans l'Executor** : Déport de l'ensemble des opérations disques bloquantes (`open`, `read`, `write`, `close`, `makedirs`, `getsize`) dans `async_add_executor_job`.
 
 ## 🚀 Nouveautés Majeures de la Version 1.5.5
 
