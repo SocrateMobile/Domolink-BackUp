@@ -3,6 +3,7 @@
   "name": "DomoLink-BackUp",
   "after_dependencies": [
     "backup",
+    "hassio",
     "persistent_notification"
   ],
   "codeowners": [
