@@ -1422,7 +1422,8 @@ class DomoLinkStorageEngine:
         elif proto == PROTO_LOCAL_SHARE:
             dest_dir = self.config.get(CONF_LOCAL_SHARE_PATH, DEFAULT_LOCAL_SHARE_PATH)
             local_path = os.path.join(dest_dir, filename)
-            if not os.path.exists(local_path):
+            local_exists = await self.hass.async_add_executor_job(os.path.exists, local_path)
+            if not local_exists:
                 raise FileNotFoundError(f"Sauvegarde locale introuvable : {local_path}")
             return await self._async_stream_local_file(local_path, auto_delete=False)
         else:
@@ -1436,7 +1437,8 @@ class DomoLinkStorageEngine:
     ) -> bool:
         """Download remote backup file directly to local filesystem destination with progress tracking."""
         proto = self.protocol
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        dest_parent = os.path.dirname(dest_path)
+        await self.hass.async_add_executor_job(lambda: os.makedirs(dest_parent, exist_ok=True))
 
         if proto in (PROTO_FTP, PROTO_FTPS):
             cfg = self.config
