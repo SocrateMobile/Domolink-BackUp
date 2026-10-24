@@ -1,7 +1,7 @@
 # 💾 DomoLink-BackUp pour Home Assistant
 
 [![HACS Compatible](https://img.shields.io/badge/HACS-Custom-blue.svg)](https://github.com/SocrateMobile/Domolink-BackUp)
-[![Version](https://img.shields.io/badge/version-1.5.10-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
+[![Version](https://img.shields.io/badge/version-1.5.12-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Socrate-FFDD00?logo=buy-me-a-coffee&logoColor=000000)](https://buymeacoffee.com/Socrate)
 
@@ -15,11 +15,8 @@ Elle reprend l'ergonomie, la mécanique et le paramétrage éprouvés de la suit
 
 ## 🚀 Nouveautés Majeures de la Version 1.5.5
 
-- **☁️ Intégration S3 Native (Amazon, Cloudflare R2, Backblaze B2)** :
-  - Sauvegardez vos archives sur n'importe quel stockage S3 Compatible via `boto3`.
-  - Transfert **parallélisé et asynchrone** : le composant S3 utilise des multiparts uploads optimisés garantissant aucune latence ni perte de données sur le fil d'exécution de Home Assistant.
-- **🛡️ Validation d'intégrité (Size/Hash Check)** :
-  - Dès qu'un upload (S3, FTP, WebDAV) est terminé, DomoLink-BackUp interroge le serveur distant pour s'assurer que la taille du fichier correspond exactement au fichier local, éliminant tout risque d'archive corrompue.
+- **🛡️ Validation d'intégrité (Size Check)** :
+  - Dès qu'un upload (FTP/FTPS, WebDAV) est terminé, DomoLink-BackUp interroge le serveur distant pour s'assurer que la taille du fichier correspond exactement au fichier local, éliminant tout risque d'archive corrompue.
 - **📦 Upload Fragmenté optimisé (Chunked)** :
   - Augmentation de la taille des chunks WebDAV à 1 Mo pour des flux de données plus stables et performants vers des routeurs/NAS capricieux (ex: Freebox Delta).
 
