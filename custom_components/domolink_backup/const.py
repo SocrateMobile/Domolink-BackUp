@@ -11,9 +11,9 @@ DEFAULT_NAME = NAME
 _MANIFEST_PATH = os.path.join(os.path.dirname(__file__), "manifest.json")
 try:
     with open(_MANIFEST_PATH, "r", encoding="utf-8") as _f:
-        VERSION = json.load(_f).get("version", "1.5.14")
+        VERSION = json.load(_f).get("version", "1.5.12")
 except Exception:
-    VERSION = "1.5.14"
+    VERSION = "1.5.12"
 
 # Backup and Restore Types
 BACKUP_TYPE_FULL = "full"

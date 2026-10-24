@@ -899,18 +899,19 @@ class DomoLinkStorageEngine:
             bytes_written = 0
             stream = await source()
 
-            def _write_chunk(f_handle, chunk_data):
-                f_handle.write(chunk_data)
-
-            with open(temp_path, "wb") as f:
+            f_handle = await self.hass.async_add_executor_job(open, temp_path, "wb")
+            try:
                 async for chunk in stream:
-                    await self.hass.async_add_executor_job(_write_chunk, f, chunk)
+                    await self.hass.async_add_executor_job(f_handle.write, chunk)
                     bytes_written += len(chunk)
                     if on_progress:
                         try:
                             on_progress(bytes_written)
                         except Exception:
                             pass
+            finally:
+                await self.hass.async_add_executor_job(f_handle.close)
+
             if size == 0:
                 size = bytes_written
 
@@ -932,11 +933,14 @@ class DomoLinkStorageEngine:
 
             return success
         finally:
-            if temp_created and file_path and os.path.exists(file_path):
-                try:
-                    os.remove(file_path)
-                except Exception:
-                    pass
+            if temp_created and file_path:
+                def _cleanup_temp():
+                    if os.path.exists(file_path):
+                        try:
+                            os.remove(file_path)
+                        except Exception:
+                            pass
+                await self.hass.async_add_executor_job(_cleanup_temp)
 
     # ─── FTP Upload ───
     async def _async_upload_ftp(self, file_path: str, filename: str, size: int = 0, on_progress: Callable[[int], None] | None = None) -> bool:
@@ -1031,9 +1035,10 @@ class DomoLinkStorageEngine:
 
         async def _file_streamer():
             sent = 0
-            with open(file_path, "rb") as f:
+            f = await self.hass.async_add_executor_job(open, file_path, "rb")
+            try:
                 while True:
-                    chunk = f.read(1024 * 1024)  # 1MB Chunks
+                    chunk = await self.hass.async_add_executor_job(f.read, 1024 * 1024)  # 1MB Chunks in executor
                     if not chunk:
                         break
                     sent += len(chunk)
@@ -1043,6 +1048,8 @@ class DomoLinkStorageEngine:
                         except Exception:
                             pass
                     yield chunk
+            finally:
+                await self.hass.async_add_executor_job(f.close)
 
         try:
             headers = {"Content-Type": "application/x-tar"}
@@ -1077,7 +1084,8 @@ class DomoLinkStorageEngine:
             _LOGGER.error("DomoLink-BackUp: URL Webhook Google Drive non renseignée")
             return False
 
-        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+        file_size = await self.hass.async_add_executor_job(os.path.getsize, file_path)
+        file_size_mb = file_size / (1024 * 1024)
         if file_size_mb > 45:
             _LOGGER.error(
                 "DomoLink-BackUp: Sauvegarde trop volumineuse (%.1f Mo) pour Google Drive Webhook (limite ~45 Mo). Utilisez FTP, FTPS ou WebDAV.",
@@ -1609,21 +1617,25 @@ class DomoLinkStorageEngine:
                 if resp.status != 200:
                     raise FileNotFoundError(f"Fichier non trouvé sur WebDAV (HTTP {resp.status})")
                 bytes_received = 0
-                with open(dest_path, "wb") as f:
+                f = await self.hass.async_add_executor_job(open, dest_path, "wb")
+                try:
                     while True:
                         chunk = await resp.content.read(131072)
                         if not chunk:
                             break
-                        f.write(chunk)
+                        await self.hass.async_add_executor_job(f.write, chunk)
                         bytes_received += len(chunk)
                         if on_progress:
                             on_progress(bytes_received)
+                finally:
+                    await self.hass.async_add_executor_job(f.close)
                 return True
 
         elif proto == PROTO_LOCAL_SHARE:
             dest_dir = self.config.get(CONF_LOCAL_SHARE_PATH, DEFAULT_LOCAL_SHARE_PATH)
             src_path = os.path.join(dest_dir, filename)
-            if not os.path.exists(src_path):
+            src_exists = await self.hass.async_add_executor_job(os.path.exists, src_path)
+            if not src_exists:
                 raise FileNotFoundError(f"Fichier source introuvable sur le partage : {src_path}")
             def _sync_copy():
                 import shutil
@@ -1693,19 +1705,23 @@ class DomoLinkStorageEngine:
 
     async def _async_stream_local_file(self, file_path: str, auto_delete: bool = True) -> AsyncIterator[bytes]:
         async def _stream():
+            f = await self.hass.async_add_executor_job(open, file_path, "rb")
             try:
-                with open(file_path, "rb") as f:
-                    while True:
-                        chunk = f.read(1024 * 1024)  # 1MB Chunks
-                        if not chunk:
-                            break
-                        yield chunk
+                while True:
+                    chunk = await self.hass.async_add_executor_job(f.read, 1024 * 1024)  # 1MB Chunks in executor
+                    if not chunk:
+                        break
+                    yield chunk
             finally:
-                if auto_delete and os.path.exists(file_path):
-                    try:
-                        os.remove(file_path)
-                    except Exception:
-                        pass
+                await self.hass.async_add_executor_job(f.close)
+                if auto_delete:
+                    def _cleanup_stream():
+                        if os.path.exists(file_path):
+                            try:
+                                os.remove(file_path)
+                            except Exception:
+                                pass
+                    await self.hass.async_add_executor_job(_cleanup_stream)
 
         return _stream()
 

@@ -569,16 +569,20 @@ async def async_download_supervisor_backup(
         session = async_get_clientsession(hass)
         async with session.get(url, headers=headers, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
             if resp.status == 200:
-                os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                with open(target_path, "wb") as f_out:
+                await hass.async_add_executor_job(lambda: os.makedirs(os.path.dirname(target_path), exist_ok=True))
+                f_out = await hass.async_add_executor_job(open, target_path, "wb")
+                try:
                     while True:
                         chunk = await resp.content.read(131072)
                         if not chunk:
                             break
-                        f_out.write(chunk)
+                        await hass.async_add_executor_job(f_out.write, chunk)
+                finally:
+                    await hass.async_add_executor_job(f_out.close)
+                size_bytes = await hass.async_add_executor_job(os.path.getsize, target_path)
                 _LOGGER.info(
                     "DomoLink-BackUp: Archive '%s' téléchargée depuis Supervisor vers %s (%s octets)",
-                    slug, target_path, os.path.getsize(target_path)
+                    slug, target_path, size_bytes
                 )
                 return True
             else:
@@ -599,10 +603,28 @@ async def async_download_backup_via_manager(
         return False
     try:
         stream = await backup_manager.async_download_backup(backup_id)
-        os.makedirs(os.path.dirname(target_path), exist_ok=True)
-        with open(target_path, "wb") as f_out:
-            async for chunk in stream:
-                f_out.write(chunk)
+        # Note: backup_manager doesn't pass hass directly, get hass from backup_manager or current loop
+        hass_obj = getattr(backup_manager, "hass", None)
+        if hass_obj:
+            await hass_obj.async_add_executor_job(lambda: os.makedirs(os.path.dirname(target_path), exist_ok=True))
+            f_out = await hass_obj.async_add_executor_job(open, target_path, "wb")
+            try:
+                async for chunk in stream:
+                    await hass_obj.async_add_executor_job(f_out.write, chunk)
+            finally:
+                await hass_obj.async_add_executor_job(f_out.close)
+        else:
+            def _sync_write_full():
+                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+            import asyncio
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, _sync_write_full)
+            f_out = await loop.run_in_executor(None, open, target_path, "wb")
+            try:
+                async for chunk in stream:
+                    await loop.run_in_executor(None, f_out.write, chunk)
+            finally:
+                await loop.run_in_executor(None, f_out.close)
         return True
     except Exception as err:
         _LOGGER.debug("DomoLink-BackUp: async_download_backup échoué via manager: %s", err)
@@ -677,9 +699,21 @@ async def async_upload_backup_to_supervisor(hass: HomeAssistant, tar_path: str) 
         from homeassistant.helpers.aiohttp_client import async_get_clientsession
         session = async_get_clientsession(hass)
         data = aiohttp.FormData()
-        with open(tar_path, "rb") as f:
-            data.add_field("file", f, filename=os.path.basename(tar_path), content_type="application/x-tar")
-            async with session.post(url, data=data, headers=headers, timeout=aiohttp.ClientTimeout(total=600)) as resp:
+
+        async def _tar_stream():
+            f = await hass.async_add_executor_job(open, tar_path, "rb")
+            try:
+                while True:
+                    chunk = await hass.async_add_executor_job(f.read, 1024 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                await hass.async_add_executor_job(f.close)
+
+        filename = await hass.async_add_executor_job(os.path.basename, tar_path)
+        data.add_field("file", _tar_stream(), filename=filename, content_type="application/x-tar")
+        async with session.post(url, data=data, headers=headers, timeout=aiohttp.ClientTimeout(total=600)) as resp:
                 if resp.status in (200, 201):
                     res_json = await resp.json()
                     _LOGGER.info("DomoLink-BackUp: Archive injectée avec succès dans Supervisor: %s", res_json)
