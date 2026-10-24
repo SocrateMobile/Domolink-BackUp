@@ -19,7 +19,11 @@ const GOOGLE_SCRIPT_CODE = `/**
  * Déployer en tant qu'Application Web :
  * - Exécuter en tant que : Moi (votre adresse Gmail)
  * - Qui a accès : Tout le monde (Anyone)
+ *
+ * SÉCURITÉ : Renseignez la clé secrète ci-dessous et saisissez la même dans Home Assistant.
  */
+var SHARED_SECRET = "CHANGE_ME_SECRET";
+
 function doPost(e) {
   try {
     if (!e || !e.postData || !e.postData.contents) {
@@ -28,14 +32,33 @@ function doPost(e) {
       })).setMimeType(ContentService.MimeType.JSON);
     }
     var data = JSON.parse(e.postData.contents);
-    if (data.probe === true) {
+
+    // Vérification du secret partagé sur chaque requête
+    if (!data.secret || data.secret !== SHARED_SECRET) {
       return ContentService.createTextOutput(JSON.stringify({
-        success: true, code: 200, message: "Connexion Google Drive validée avec succès."
+        success: false, code: 401, message: "Secret partagé invalide ou absent."
       })).setMimeType(ContentService.MimeType.JSON);
     }
-    var folder = DriveApp.getFoldersByName("DomoLink-BackUp").hasNext() ? 
-                 DriveApp.getFoldersByName("DomoLink-BackUp").next() : 
-                 DriveApp.createFolder("DomoLink-BackUp");
+
+    var folderId = data.folder_id || "";
+    var folder;
+    if (folderId && folderId.trim() !== "") {
+      try {
+        folder = DriveApp.getFolderById(folderId.trim());
+      } catch (fErr) {
+        folder = null;
+      }
+    }
+    if (!folder) {
+      var folders = DriveApp.getFoldersByName("DomoLink-BackUp");
+      folder = folders.hasNext() ? folders.next() : DriveApp.createFolder("DomoLink-BackUp");
+    }
+
+    if (data.probe === true) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: true, code: 200, message: "Connexion Google Drive validée avec succès.", folder_name: folder.getName()
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
     if (data.action === "list") {
       var files = folder.getFiles();
       var list = [];
@@ -46,8 +69,23 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({ success: true, code: 200, backups: list })).setMimeType(ContentService.MimeType.JSON);
     }
     if (data.action === "delete") {
-      DriveApp.getFileById(data.file_id).setTrashed(true);
-      return ContentService.createTextOutput(JSON.stringify({ success: true, code: 200, message: "Supprimé." })).setMimeType(ContentService.MimeType.JSON);
+      if (!data.file_id) {
+        return ContentService.createTextOutput(JSON.stringify({ success: false, code: 400, message: "ID de fichier manquant." })).setMimeType(ContentService.MimeType.JSON);
+      }
+      var fileToDelete = DriveApp.getFileById(data.file_id);
+      var parents = fileToDelete.getParents();
+      var inFolder = false;
+      while (parents.hasNext()) {
+        if (parents.next().getId() === folder.getId()) {
+          inFolder = true;
+          break;
+        }
+      }
+      if (!inFolder) {
+        return ContentService.createTextOutput(JSON.stringify({ success: false, code: 403, message: "Suppression refusée : le fichier n'appartient pas au dossier de sauvegarde DomoLink-BackUp." })).setMimeType(ContentService.MimeType.JSON);
+      }
+      fileToDelete.setTrashed(true);
+      return ContentService.createTextOutput(JSON.stringify({ success: true, code: 200, message: "Fichier supprimé du dossier de sauvegarde." })).setMimeType(ContentService.MimeType.JSON);
     }
     if (data.file_content) {
       var decoded = Utilities.base64Decode(data.file_content);
@@ -1753,9 +1791,9 @@ class DomoLinkBackupPanel extends HTMLElement {
                   ${progressLogs.length === 0 ? `
                     <div class="log-entry log-info">Initialisation du processus de sauvegarde...</div>
                   ` : progressLogs.map(l => `
-                    <div class="log-entry log-${l.level || 'info'}">
-                      <span class="log-time">[${l.time}]</span>
-                      <span>${l.message}</span>
+                    <div class="log-entry log-${escapeHtml(l.level || 'info')}">
+                      <span class="log-time">[${escapeHtml(l.time)}]</span>
+                      <span>${escapeHtml(l.message)}</span>
                     </div>
                   `).join('')}
                 </div>
@@ -1781,33 +1819,33 @@ class DomoLinkBackupPanel extends HTMLElement {
               <div class="report-grid">
                 <div class="report-box">
                   <div class="report-box-title">Nom de l'archive</div>
-                  <div class="report-box-value">${report.backup_name || 'N/A'}</div>
+                  <div class="report-box-value">${escapeHtml(report.backup_name || 'N/A')}</div>
                 </div>
                 <div class="report-box">
                   <div class="report-box-title">Cible de stockage</div>
-                  <div class="report-box-value">${report.destination || dest}</div>
+                  <div class="report-box-value">${escapeHtml(report.destination || dest)}</div>
                 </div>
                 <div class="report-box">
                   <div class="report-box-title">Taille générée</div>
-                  <div class="report-box-value">${report.size_mb ? report.size_mb + ' Mo' : roundSize(report.size_bytes)}</div>
+                  <div class="report-box-value">${escapeHtml(report.size_mb ? report.size_mb + ' Mo' : roundSize(report.size_bytes))}</div>
                 </div>
                 <div class="report-box">
                   <div class="report-box-title">Durée de l'opération</div>
-                  <div class="report-box-value">${report.duration_formatted || formatDuration(report.duration_sec)}</div>
+                  <div class="report-box-value">${escapeHtml(report.duration_formatted || formatDuration(report.duration_sec))}</div>
                 </div>
                 <div class="report-box">
                   <div class="report-box-title">Taux de compression</div>
-                  <div class="report-box-value" style="color: #60a5fa;">${report.compression_ratio || 'Format .tar standard'}</div>
+                  <div class="report-box-value" style="color: #60a5fa;">${escapeHtml(report.compression_ratio || 'Format .tar standard')}</div>
                 </div>
                 <div class="report-box">
                   <div class="report-box-title">Emplacement source</div>
-                  <div class="report-box-value" style="font-size: 12px; word-break: break-all; color: #94a3b8;">${report.source_path || 'Dossier /backup Home Assistant'}</div>
+                  <div class="report-box-value" style="font-size: 12px; word-break: break-all; color: #94a3b8;">${escapeHtml(report.source_path || 'Dossier /backup Home Assistant')}</div>
                 </div>
               </div>
 
               ${report.components && report.components.length ? `
                 <div style="margin-top: 14px; font-size: 12px; color: #94a3b8;">
-                  <b>Éléments inclus :</b> ${report.components.join(' • ')}
+                  <b>Éléments inclus :</b> ${report.components.map(escapeHtml).join(' • ')}
                 </div>
               ` : ''}
             </div>
@@ -1838,7 +1876,7 @@ class DomoLinkBackupPanel extends HTMLElement {
             <div class="stat-card">
               <div class="stat-label">Dernière sauvegarde</div>
               <div class="stat-value" style="font-size: 16px;">${lastBackupDate}</div>
-              <div class="stat-sub">${lastBackupName} ${lastBackupSize ? '(' + lastBackupSize + ')' : ''}</div>
+              <div class="stat-sub">${escapeHtml(lastBackupName)} ${lastBackupSize ? '(' + escapeHtml(lastBackupSize) + ')' : ''}</div>
             </div>
           </div>
 
@@ -1867,8 +1905,8 @@ class DomoLinkBackupPanel extends HTMLElement {
             <p style="margin: 0; color: #cbd5e1; font-size: 14px;">
               Activité : <b>${status}</b>
             </p>
-            ${d.last_action ? `<p style="margin-top: 8px; color: #94a3b8; font-size: 13px;">Détail : ${d.last_action}</p>` : ''}
-            ${d.last_error ? `<p style="margin-top: 8px; color: #f87171; font-size: 13px;">⚠️ Erreur : ${d.last_error}</p>` : ''}
+            ${d.last_action ? `<p style="margin-top: 8px; color: #94a3b8; font-size: 13px;">Détail : ${escapeHtml(d.last_action)}</p>` : ''}
+            ${d.last_error ? `<p style="margin-top: 8px; color: #f87171; font-size: 13px;">⚠️ Erreur : ${escapeHtml(d.last_error)}</p>` : ''}
           </div>
         ` : ''}
 
@@ -1905,10 +1943,10 @@ class DomoLinkBackupPanel extends HTMLElement {
                       <td>${b.size ? (roundSize(b.size)) : '0 Ko'}</td>
                       <td><span class="tag-proto">${escapeHtml(b.protocol || 'ftp')}</span></td>
                       <td style="text-align: right; white-space: nowrap;">
-                        <button class="btn-restore" data-filename="${b.filename || b.name}" data-id="${b.backup_id}">
+                        <button class="btn-restore" data-filename="${escapeHtml(b.filename || b.name || '')}" data-id="${escapeHtml(b.backup_id || '')}">
                           🔄 Restaurer
                         </button>
-                        <button class="btn-delete" data-id="${b.backup_id}" data-name="${b.name}" style="margin-left: 6px;">
+                        <button class="btn-delete" data-id="${escapeHtml(b.backup_id || '')}" data-name="${escapeHtml(b.name || '')}" style="margin-left: 6px;">
                           🗑️ Supprimer
                         </button>
                       </td>
@@ -2125,9 +2163,9 @@ class DomoLinkBackupPanel extends HTMLElement {
               ${testLogs.length === 0 ? `
                 <div class="log-entry log-info">Aucun log récent. Cliquez sur "Relancer le test" pour interroger la cible.</div>
               ` : testLogs.map(l => `
-                <div class="log-entry log-${l.level || 'info'}">
-                  <span class="log-time">[${l.time}]</span>
-                  <span>${l.message}</span>
+                <div class="log-entry log-${escapeHtml(l.level || 'info')}">
+                  <span class="log-time">[${escapeHtml(l.time)}]</span>
+                  <span>${escapeHtml(l.message)}</span>
                 </div>
               `).join('')}
             </div>
@@ -2306,7 +2344,7 @@ class DomoLinkBackupPanel extends HTMLElement {
             <div class="modal-body">
               <p style="font-size: 13px; color: #94a3b8; margin-top: 0; margin-bottom: 14px;">
                 Sélectionnez le mode d'action pour l'archive distante :<br>
-                <code style="color: #38bdf8; font-size: 12px; word-break: break-all; font-weight: 600;">${this._restoreModalBackup.name || this._restoreModalBackup.filename}</code>
+                <code style="color: #38bdf8; font-size: 12px; word-break: break-all; font-weight: 600;">${escapeHtml(this._restoreModalBackup.name || this._restoreModalBackup.filename || '')}</code>
                 ${this._restoreModalBackup.size ? ` <span style="color: #64748b; font-size: 12px;">(${roundSize(this._restoreModalBackup.size)})</span>` : ''}
               </p>
 
