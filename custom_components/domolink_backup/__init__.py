@@ -2402,10 +2402,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         vol.Optional("include_blueprints", default=True): bool,
         vol.Optional("addons"): [str],
         vol.Optional("folders"): [str],
-    })
+    }, extra=vol.ALLOW_EXTRA)
     schema_upload = vol.Schema({
         vol.Required("file_path"): str,
-    })
+    }, extra=vol.ALLOW_EXTRA)
     schema_restore = vol.Schema({
         vol.Required("filename"): str,
         vol.Optional("restore_mode", default=RESTORE_MODE_DOWNLOAD_ONLY): vol.In(
@@ -2417,14 +2417,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         vol.Optional("restore_blueprints", default=True): bool,
         vol.Optional("restore_addons"): [str],
         vol.Optional("restore_folders"): [str],
-    })
+    }, extra=vol.ALLOW_EXTRA)
+    schema_empty = vol.Schema({}, extra=vol.ALLOW_EXTRA)
 
     async_register_admin_service(hass, DOMAIN, SERVICE_CREATE_BACKUP, _handle_create_backup, schema=schema_create)
     async_register_admin_service(hass, DOMAIN, SERVICE_UPLOAD_BACKUP, _handle_upload_backup, schema=schema_upload)
     async_register_admin_service(hass, DOMAIN, SERVICE_RESTORE_BACKUP, _handle_restore_backup, schema=schema_restore)
-    async_register_admin_service(hass, DOMAIN, SERVICE_TEST_CONNECTION, _handle_test_connection)
-    async_register_admin_service(hass, DOMAIN, SERVICE_CLEAN_OLD_BACKUPS, _handle_clean_old_backups)
-    async_register_admin_service(hass, DOMAIN, SERVICE_SYNC_BACKUPS, _handle_sync_backups)
+    async_register_admin_service(hass, DOMAIN, SERVICE_TEST_CONNECTION, _handle_test_connection, schema=schema_empty)
+    async_register_admin_service(hass, DOMAIN, SERVICE_CLEAN_OLD_BACKUPS, _handle_clean_old_backups, schema=schema_empty)
+    async_register_admin_service(hass, DOMAIN, SERVICE_SYNC_BACKUPS, _handle_sync_backups, schema=schema_empty)
 
     # ─── Enregistrement des commandes WebSocket pour le Dashboard UI ───
     _register_websocket_commands(hass)
