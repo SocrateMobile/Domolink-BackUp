@@ -1,7 +1,7 @@
 # 💾 DomoLink-BackUp pour Home Assistant
 
 [![HACS Compatible](https://img.shields.io/badge/HACS-Custom-blue.svg)](https://github.com/SocrateMobile/Domolink-BackUp)
-[![Version](https://img.shields.io/badge/version-1.5.18-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
+[![Version](https://img.shields.io/badge/version-1.5.19-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Socrate-FFDD00?logo=buy-me-a-coffee&logoColor=000000)](https://buymeacoffee.com/Socrate)
 
@@ -13,11 +13,16 @@ Elle reprend l'ergonomie, la mécanique et le paramétrage éprouvés de la suit
 
 ---
 
-## 🚀 Nouveautés de la Version 1.5.18
+## 🚀 Nouveautés de la Version 1.5.19
 
-- **Compatibilité Home Assistant Core 2024.10+ & 2025+** :
-  - Définition explicite de `extra=vol.ALLOW_EXTRA` sur l'ensemble des schémas de validation des services d'administration (`async_register_admin_service`), garantissant l'acceptation sans rejet des paramètres étendus et options de payload (`schema_empty`, `schema_create`, `schema_upload`, `schema_restore`).
-  - Ajout du jeu de tests unitaires automatisés et de non-régression d'architecture (`tests/test_architecture.py`).
+- **Restauration native BackupManager (Core / Container sans Supervisor)** :
+  - Transmission stricte de l'ensemble des arguments keyword-only requis par `BackupManager.async_restore_backup` (`agent_id`, `password`, `restore_addons`, `restore_database`, `restore_folders`, `restore_homeassistant`) avec l'identifiant d'agent `backup.local`.
+  - Actualisation et resynchronisation automatique des archives (`_load_backups`) de l'agent local avant toute opération de restauration.
+- **Restauration partielle granulaire (HAOS / Supervised & Core / Container)** :
+  - Extraction sélective des intégrations (`custom_components`), thèmes et blueprints activée sur tous les types d'installations lorsque `restore_homeassistant` est désactivé.
+  - Appel conditionnel à `hassio.restore_partial` uniquement lorsqu'il y a des composants gérés par Supervisor à restaurer (`restore_homeassistant: True`, add-ons ou dossiers).
+- **Nettoyage et fiabilisation de la scrutation (Polling)** :
+  - Suppression intégrale des appels résiduels à `async_query_supervisor` lors de la détection de sauvegarde locale au profit du `BackupManager` natif.
 
 ---
 

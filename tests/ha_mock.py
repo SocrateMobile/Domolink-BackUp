@@ -200,6 +200,22 @@ def setup_ha_mock():
     ha_helpers.__path__ = []
     sys.modules["homeassistant.helpers"] = ha_helpers
 
+    # homeassistant.helpers.config_validation
+    ha_cv = types.ModuleType("homeassistant.helpers.config_validation")
+    ha_cv.string = str
+    ha_cv.boolean = bool
+    ha_cv.ensure_list = lambda x: [x] if not isinstance(x, list) else x
+    ha_cv.entity_id = str
+    ha_cv.time_period = lambda x: x
+    ha_cv.positive_int = int
+    ha_cv.port = int
+    sys.modules["homeassistant.helpers.config_validation"] = ha_cv
+
+    # homeassistant.helpers.start
+    ha_start = types.ModuleType("homeassistant.helpers.start")
+    ha_start.async_at_started = MagicMock()
+    sys.modules["homeassistant.helpers.start"] = ha_start
+
     # homeassistant.helpers.restore_state
     ha_restore = types.ModuleType("homeassistant.helpers.restore_state")
     class RestoreEntity:
