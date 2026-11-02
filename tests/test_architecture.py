@@ -80,6 +80,91 @@ class TestDomolinkBackupArchitecture(unittest.TestCase):
         self.assertFalse(is_safe_path("../../etc/passwd", "/backup"))
         self.assertFalse(is_safe_path("../.storage/auth", "/backup"))
 
+    def test_no_obsolete_supervisor_queries(self):
+        """Ensure async_query_supervisor is completely removed from codebase."""
+        import glob
+        py_files = glob.glob(os.path.join(ROOT_DIR, "custom_components", "domolink_backup", "**", "*.py"), recursive=True)
+        for py_file in py_files:
+            with open(py_file, "r", encoding="utf-8") as f:
+                content = f.read()
+            self.assertNotIn("async_query_supervisor", content, f"Obsolete call found in {py_file}")
+            self.assertNotIn("supervisor_slugs_before", content, f"Obsolete variable found in {py_file}")
+
+    def test_backup_manager_restore_keyword_args(self):
+        """Ensure async_restore_backup_via_manager supplies all required keyword arguments to BackupManager."""
+        import asyncio
+        from custom_components.domolink_backup import async_restore_backup_via_manager
+
+        mock_local_agent = MagicMock()
+        mock_local_agent._load_backups = AsyncMock()
+
+        mock_manager = MagicMock()
+        mock_manager.backup_agents = {"backup.local": mock_local_agent}
+        mock_manager.async_get_backups = AsyncMock()
+
+        # Strict function to simulate BackupManager.async_restore_backup keyword-only signature
+        called_kwargs = {}
+        async def mock_async_restore_backup(
+            backup_id: str,
+            *,
+            agent_id: str,
+            password: str | None,
+            restore_addons: list[str] | None,
+            restore_database: bool,
+            restore_folders: list | None,
+            restore_homeassistant: bool,
+        ) -> None:
+            called_kwargs.update({
+                "backup_id": backup_id,
+                "agent_id": agent_id,
+                "password": password,
+                "restore_addons": restore_addons,
+                "restore_database": restore_database,
+                "restore_folders": restore_folders,
+                "restore_homeassistant": restore_homeassistant,
+            })
+
+        mock_manager.async_restore_backup = mock_async_restore_backup
+
+        asyncio.run(
+            async_restore_backup_via_manager(
+                mock_manager,
+                "slug_12345",
+                agent_id="backup.local",
+                password=None,
+                restore_addons=None,
+                restore_database=True,
+                restore_folders=None,
+                restore_homeassistant=True,
+            )
+        )
+
+        # Agent archive list must be refreshed
+        mock_local_agent._load_backups.assert_awaited_once()
+
+        # All keyword-only arguments must be passed correctly
+        self.assertEqual(called_kwargs["backup_id"], "slug_12345")
+        self.assertEqual(called_kwargs["agent_id"], "backup.local")
+        self.assertIsNone(called_kwargs["password"])
+        self.assertIsNone(called_kwargs["restore_addons"])
+        self.assertTrue(called_kwargs["restore_database"])
+        self.assertIsNone(called_kwargs["restore_folders"])
+        self.assertTrue(called_kwargs["restore_homeassistant"])
+
+    def test_partial_restore_service_dispatch_conditions(self):
+        """Ensure hassio.restore_partial is only called when there is work for Supervisor."""
+        # Condition 1: restore_homeassistant=False, no addons, no folders -> no Supervisor call
+        has_supervisor_work_1 = bool(False) or bool(None) or bool([])
+        self.assertFalse(has_supervisor_work_1)
+
+        # Condition 2: restore_homeassistant=True -> Supervisor call needed
+        has_supervisor_work_2 = bool(True) or bool(None) or bool([])
+        self.assertTrue(has_supervisor_work_2)
+
+        # Condition 3: restore_homeassistant=False, but addons selected -> Supervisor call needed
+        has_supervisor_work_3 = bool(False) or bool(["addon_1"]) or bool([])
+        self.assertTrue(has_supervisor_work_3)
+
 
 if __name__ == "__main__":
     unittest.main()

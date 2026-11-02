@@ -632,6 +632,52 @@ async def async_download_backup_via_manager(
     return False
 
 
+async def async_restore_backup_via_manager(
+    backup_manager: Any,
+    backup_id: str,
+    *,
+    agent_id: str = "backup.local",
+    password: str | None = None,
+    restore_addons: list[str] | None = None,
+    restore_database: bool = True,
+    restore_folders: list[Any] | None = None,
+    restore_homeassistant: bool = True,
+) -> None:
+    """Restore a backup archive via BackupManager ensuring the agent knows the archive."""
+    # 1. Ensure the agent holding the backup (backup.local) has loaded/scanned disk archives
+    agents = getattr(backup_manager, "backup_agents", {})
+    local_agent = agents.get(agent_id) if isinstance(agents, dict) else None
+    if local_agent:
+        if hasattr(local_agent, "_load_backups"):
+            try:
+                await local_agent._load_backups()
+            except Exception as load_err:
+                _LOGGER.debug("DomoLink-BackUp: Erreur _load_backups sur %s: %s", agent_id, load_err)
+        elif hasattr(local_agent, "async_list_backups"):
+            try:
+                await local_agent.async_list_backups()
+            except Exception as list_err:
+                _LOGGER.debug("DomoLink-BackUp: Erreur async_list_backups sur %s: %s", agent_id, list_err)
+
+    # 2. Refresh known backups in BackupManager if available
+    if hasattr(backup_manager, "async_get_backups"):
+        try:
+            await backup_manager.async_get_backups()
+        except Exception:
+            pass
+
+    # 3. Call BackupManager.async_restore_backup with all required keyword-only arguments
+    await backup_manager.async_restore_backup(
+        backup_id,
+        agent_id=agent_id,
+        password=password,
+        restore_addons=restore_addons,
+        restore_database=restore_database,
+        restore_folders=restore_folders,
+        restore_homeassistant=restore_homeassistant,
+    )
+
+
 def _sync_read_tar_backup_json(tar_path: str) -> dict[str, Any]:
     """Safely extract and parse backup.json or snapshot.json from a .tar archive."""
     try:
@@ -1181,15 +1227,6 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             log_msg=f"Répertoires surveillés : {existing_dirs}",
         )
 
-        # Snapshot existing Supervisor backups before triggering
-        ha_info = await async_get_ha_backup_info(self.hass)
-        supervisor_slugs_before: set[str] = set()
-        if ha_info.get("supervisor_available"):
-            for sb in ha_info.get("supervisor_backups", []):
-                if sb.get("slug"):
-                    supervisor_slugs_before.add(str(sb["slug"]).lower())
-            _LOGGER.info("DomoLink-BackUp: %d sauvegardes Supervisor existantes détectées.", len(supervisor_slugs_before))
-
         # 3. Check for Home Assistant native BackupManager
         backup_manager = None
         manager_backups_before = set()
@@ -1346,60 +1383,11 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     except Exception:
                         pass
 
-                # Check Supervisor API directly (every 2.0s)
-                if not detected_slug and ("hassio" in self.hass.config.components or ha_info.get("supervisor_available")):
-                    try:
-                        s_res = await async_query_supervisor(self.hass, "/backups")
-                        if s_res and isinstance(s_res, dict) and "data" in s_res and "backups" in s_res["data"]:
-                            for sb in s_res["data"]["backups"]:
-                                sb_slug = sb.get("slug")
-                                if not sb_slug:
-                                    continue
-                                sb_slug_str = str(sb_slug)
-                                is_new = (sb_slug_str.lower() not in supervisor_slugs_before)
-                                sb_date = sb.get("date", "")
-                                if not is_new and sb_date:
-                                    try:
-                                        dt = datetime.fromisoformat(sb_date.replace("Z", "+00:00"))
-                                        if dt.timestamp() >= started_epoch - 30.0:
-                                            is_new = True
-                                    except Exception:
-                                        pass
-                                if is_new:
-                                    detected_slug = sb_slug_str
-                                    sb_sz = sb.get("size", 0)
-                                    sb_mb = round(sb_sz / (1024 * 1024), 1)
-                                    self.update_progress(
-                                        STAGE_CREATING_LOCAL,
-                                        35,
-                                        "Archive identifiée (Supervisor)",
-                                        f"Slug : {detected_slug} ({sb_mb} Mo)",
-                                        log_msg=f"📦 [Supervisor] Sauvegarde enregistrée : {detected_slug} ({sb_mb} Mo)",
-                                    )
-                                    break
-                    except Exception as s_err:
-                        _LOGGER.debug("DomoLink-BackUp: Erreur scrutation Supervisor: %s", s_err)
-
                 # Check if backup task is completed
                 if backup_task and backup_task.done():
                     exc = backup_task.exception()
                     if exc:
                         raise exc
-                    # If slug was not yet detected, query supervisor or backup manager one more time
-                    if not detected_slug and ("hassio" in self.hass.config.components or ha_info.get("supervisor_available")):
-                        try:
-                            s_res = await async_query_supervisor(self.hass, "/backups")
-                            if s_res and isinstance(s_res, dict) and "data" in s_res and "backups" in s_res["data"]:
-                                backups_list = s_res["data"]["backups"]
-                                for sb in backups_list:
-                                    sb_slug = sb.get("slug")
-                                    if sb_slug and str(sb_slug).lower() not in supervisor_slugs_before:
-                                        detected_slug = str(sb_slug)
-                                        break
-                                if not detected_slug and backups_list:
-                                    detected_slug = str(backups_list[0].get("slug", ""))
-                        except Exception:
-                            pass
 
                 # If detected_slug is known and (backup_task is done or not running):
                 # In HAOS / Supervised, the file is NOT on disk in the Core container.
@@ -2087,7 +2075,16 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                     if b_mgr and hasattr(b_mgr, "async_restore_backup"):
                         _LOGGER.info("DomoLink-BackUp: Appel BackupManager.async_restore_backup pour slug %s", target_slug)
-                        await b_mgr.async_restore_backup(target_slug)
+                        await async_restore_backup_via_manager(
+                            b_mgr,
+                            target_slug,
+                            agent_id="backup.local",
+                            password=None,
+                            restore_addons=None,
+                            restore_database=True,
+                            restore_folders=None,
+                            restore_homeassistant=True,
+                        )
                     else:
                         raise RuntimeError(
                             "Aucun service de restauration Home Assistant disponible (ni hassio.restore_full, ni BackupManager.async_restore_backup)."
@@ -2128,20 +2125,43 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
                 await self.notifier.async_notify_start(f"Restauration partielle : {backup_display_name}", "Home Assistant (Système)")
 
-                # If on Supervisor:
+                # If restore_homeassistant is False, extract selected subfolders on BOTH install types
+                if not restore_homeassistant:
+                    subfolders_to_extract = []
+                    if restore_integrations:
+                        subfolders_to_extract.append("custom_components")
+                    if restore_themes:
+                        subfolders_to_extract.append("themes")
+                    if restore_blueprints:
+                        subfolders_to_extract.append("blueprints")
+
+                    if subfolders_to_extract:
+                        config_dir = self.hass.config.config_dir
+                        extracted = await self.hass.async_add_executor_job(
+                            _sync_extract_core_subfolders, local_dest, config_dir, subfolders_to_extract
+                        )
+                        _LOGGER.info("DomoLink-BackUp: Éléments extraits directement dans config: %s", extracted)
+
+                # Supervisor restore: only call hassio.restore_partial when there is something for Supervisor to restore
                 if self.hass.services.has_service("hassio", "restore_partial"):
-                    service_data: dict[str, Any] = {
-                        "slug": target_slug,
-                        "homeassistant": bool(restore_homeassistant),
-                    }
-                    if restore_addons is not None:
-                        service_data["addons"] = list(restore_addons)
-                    if restore_folders is not None:
-                        service_data["folders"] = list(restore_folders)
-                    _LOGGER.info("DomoLink-BackUp: Appel hassio.restore_partial: %s", service_data)
-                    await self.hass.services.async_call(
-                        "hassio", "restore_partial", service_data, blocking=False
+                    has_supervisor_work = (
+                        bool(restore_homeassistant)
+                        or bool(restore_addons)
+                        or bool(restore_folders)
                     )
+                    if has_supervisor_work:
+                        service_data: dict[str, Any] = {
+                            "slug": target_slug,
+                            "homeassistant": bool(restore_homeassistant),
+                        }
+                        if restore_addons:
+                            service_data["addons"] = list(restore_addons)
+                        if restore_folders:
+                            service_data["folders"] = list(restore_folders)
+                        _LOGGER.info("DomoLink-BackUp: Appel hassio.restore_partial: %s", service_data)
+                        await self.hass.services.async_call(
+                            "hassio", "restore_partial", service_data, blocking=False
+                        )
                 else:
                     # Installation without Supervisor
                     if restore_homeassistant:
@@ -2161,27 +2181,20 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                         if b_mgr and hasattr(b_mgr, "async_restore_backup"):
                             _LOGGER.info("DomoLink-BackUp: Appel BackupManager.async_restore_backup pour slug %s", target_slug)
-                            await b_mgr.async_restore_backup(target_slug)
+                            await async_restore_backup_via_manager(
+                                b_mgr,
+                                target_slug,
+                                agent_id="backup.local",
+                                password=None,
+                                restore_addons=None,
+                                restore_database=True,
+                                restore_folders=None,
+                                restore_homeassistant=True,
+                            )
                         else:
                             raise RuntimeError(
                                 "Aucun service de restauration Home Assistant disponible (ni hassio.restore_partial, ni BackupManager.async_restore_backup)."
                             )
-                    else:
-                        # User did not want full Core restore, but may have requested specific subcomponents
-                        subfolders_to_extract = []
-                        if restore_integrations:
-                            subfolders_to_extract.append("custom_components")
-                        if restore_themes:
-                            subfolders_to_extract.append("themes")
-                        if restore_blueprints:
-                            subfolders_to_extract.append("blueprints")
-
-                        if subfolders_to_extract:
-                            config_dir = self.hass.config.config_dir
-                            extracted = await self.hass.async_add_executor_job(
-                                _sync_extract_core_subfolders, local_dest, config_dir, subfolders_to_extract
-                            )
-                            _LOGGER.info("DomoLink-BackUp: Éléments extraits directement dans config: %s", extracted)
 
                 restore_report = {
                     "operation": "Restauration Partielle / Incrémentielle",
