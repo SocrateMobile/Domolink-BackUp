@@ -1,7 +1,7 @@
 # 💾 DomoLink-BackUp pour Home Assistant
 
 [![HACS Compatible](https://img.shields.io/badge/HACS-Custom-blue.svg)](https://github.com/SocrateMobile/Domolink-BackUp)
-[![Version](https://img.shields.io/badge/version-1.5.19-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
+[![Version](https://img.shields.io/badge/version-1.5.20-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Socrate-FFDD00?logo=buy-me-a-coffee&logoColor=000000)](https://buymeacoffee.com/Socrate)
 
@@ -10,6 +10,14 @@ Dans la lignée directe de **DomoLink-Alarm** et **DomoLink-Mistral IA**, **Domo
 Elle reprend l'ergonomie, la mécanique et le paramétrage éprouvés de la suite DomoLink (profils NAS Asustor, Synology, QNAP, TrueNAS, Freebox, Unraid, transferts FTP/FTPS, WebDAV/Nextcloud, Google Drive sans clé API complexe, alertes Telegram et purge FIFO automatique).
 
 [![Buy Me A Coffee](https://img.buymeacoffee.com/button-api/?text=Buy+me+a+coffee&emoji=☕&slug=Socrate&button_colour=FFDD00&font_colour=000000&font_family=Poppins&outline_colour=000000&coffee_colour=ffffff)](https://www.buymeacoffee.com/Socrate)
+
+---
+
+## 🚀 Nouveautés de la Version 1.5.20
+
+- **Amélioration de l'interface & responsive design** :
+  - Correction du débordement textuel sur la carte *Dernière sauvegarde* : ajout de `overflow-wrap: anywhere`, `word-break: break-word` et `min-width: 0` pour les noms de fichiers longs ou sans espace.
+  - Ajout de l'infobulle complète (`title`) au survol de l'archive.
 
 ---
 

@@ -1028,6 +1028,8 @@ class DomoLinkBackupPanel extends HTMLElement {
           border-radius: 14px;
           padding: 20px;
           box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+          min-width: 0;
+          overflow: hidden;
         }
 
         .stat-label {
@@ -1043,12 +1045,17 @@ class DomoLinkBackupPanel extends HTMLElement {
           font-size: 26px;
           font-weight: 700;
           color: #f8fafc;
+          word-break: break-word;
+          overflow-wrap: anywhere;
         }
 
         .stat-sub {
           font-size: 13px;
           color: #64748b;
           margin-top: 6px;
+          word-break: break-word;
+          overflow-wrap: anywhere;
+          line-height: 1.4;
         }
 
         /* Quota Bar */
@@ -1876,7 +1883,7 @@ class DomoLinkBackupPanel extends HTMLElement {
             <div class="stat-card">
               <div class="stat-label">Dernière sauvegarde</div>
               <div class="stat-value" style="font-size: 16px;">${lastBackupDate}</div>
-              <div class="stat-sub">${escapeHtml(lastBackupName)} ${lastBackupSize ? '(' + escapeHtml(lastBackupSize) + ')' : ''}</div>
+              <div class="stat-sub" title="${escapeHtml(lastBackupName)} ${lastBackupSize ? '(' + escapeHtml(lastBackupSize) + ')' : ''}">${escapeHtml(lastBackupName)} ${lastBackupSize ? '(' + escapeHtml(lastBackupSize) + ')' : ''}</div>
             </div>
           </div>
 
