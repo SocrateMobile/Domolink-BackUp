@@ -165,6 +165,65 @@ class TestDomolinkBackupArchitecture(unittest.TestCase):
         has_supervisor_work_3 = bool(False) or bool(["addon_1"]) or bool([])
         self.assertTrue(has_supervisor_work_3)
 
+    def test_non_iterable_known_backups_and_slug_selection(self):
+        """Ensure KnownBackups (non-iterable) never blocks backup detection or selects old archives."""
+        import asyncio
+        import time
+        from datetime import datetime, timezone
+        from custom_components.domolink_backup import (
+            _async_get_local_backups_map,
+            _pick_newest_backup_slug,
+        )
+
+        class NonIterableKnownBackups:
+            """Simulate Home Assistant Core KnownBackups which has no __iter__."""
+            pass
+
+        old_backup = MagicMock()
+        old_backup.backup_id = "fe3aadba"
+        old_backup.name = "Old 10KB Backup"
+        old_backup.date = "2026-10-30T15:42:00+00:00"
+        old_backup.size = 10240
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        new_backup = MagicMock()
+        new_backup.backup_id = "a9c8b7d6"
+        new_backup.name = "New Full Backup"
+        new_backup.date = now_iso
+        new_backup.size = 524288000
+
+        mock_hassio_agent = MagicMock()
+        mock_hassio_agent.domain = "hassio"
+        mock_hassio_agent.async_list_backups = AsyncMock(return_value=[old_backup, new_backup])
+
+        mock_domolink_agent = MagicMock()
+        mock_domolink_agent.domain = "domolink_backup"
+        mock_domolink_agent.async_list_backups = AsyncMock(side_effect=AssertionError("Should not query remote FTP agent"))
+
+        mock_manager = MagicMock()
+        mock_manager.known_backups = NonIterableKnownBackups()
+        mock_manager.backup_agents = {
+            "hassio.local": mock_hassio_agent,
+            "domolink_backup.entry1": mock_domolink_agent,
+        }
+
+        backups_map = asyncio.run(_async_get_local_backups_map(mock_manager))
+        self.assertIn("fe3aadba", backups_map)
+        self.assertIn("a9c8b7d6", backups_map)
+
+        # Case 1: before_ids contains old_backup -> picks new_backup
+        slug_1 = _pick_newest_backup_slug(backups_map, {"fe3aadba"}, time.time() - 5.0, "New Full Backup")
+        self.assertEqual(slug_1, "a9c8b7d6")
+
+        # Case 2: even if before_ids was empty, it must pick the newest backup, never the old one
+        slug_2 = _pick_newest_backup_slug(backups_map, set(), time.time() - 5.0, "New Full Backup")
+        self.assertEqual(slug_2, "a9c8b7d6")
+
+        # Case 3: if only the old backup exists and before_ids was empty, must return None (never upload old archive!)
+        only_old_map = {"fe3aadba": old_backup}
+        slug_3 = _pick_newest_backup_slug(only_old_map, set(), time.time(), "New Full Backup")
+        self.assertIsNone(slug_3)
+
 
 if __name__ == "__main__":
     unittest.main()
