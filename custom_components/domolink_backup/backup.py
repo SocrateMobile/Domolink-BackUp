@@ -42,6 +42,13 @@ except ImportError:
             self.name = name
             self.date = date
             self.size = size
+            self.addons = kwargs.get("addons", [])
+            self.database_included = kwargs.get("database_included", True)
+            self.extra_metadata = kwargs.get("extra_metadata", {})
+            self.folders = kwargs.get("folders", [])
+            self.homeassistant_included = kwargs.get("homeassistant_included", True)
+            self.homeassistant_version = kwargs.get("homeassistant_version")
+            self.protected = kwargs.get("protected", False)
 
     class BackupAgentError(Exception):  # type: ignore[no-redef]
         """Fallback BackupAgentError."""
@@ -53,26 +60,70 @@ except ImportError:
 DATA_BACKUP_AGENT_LISTENERS = f"{DOMAIN}_backup_agent_listeners"
 
 
-def _create_agent_backup(backup_id: str, name: str, date: str, size: int) -> AgentBackup:
+def _create_agent_backup(
+    backup_id: str,
+    name: str,
+    date: str,
+    size: int,
+    *,
+    addons: list[Any] | None = None,
+    database_included: bool = True,
+    extra_metadata: dict[str, Any] | None = None,
+    folders: list[Any] | None = None,
+    homeassistant_included: bool = True,
+    homeassistant_version: str | None = None,
+    protected: bool = False,
+) -> AgentBackup:
     """Safely instantiate AgentBackup with proper parameters for the running HA version."""
+    parsed_addons: list[Any] = []
+    if addons:
+        try:
+            from homeassistant.components.backup import AddonInfo
+            for a in addons:
+                if isinstance(a, dict):
+                    parsed_addons.append(
+                        AddonInfo(
+                            name=str(a.get("name") or a.get("slug") or ""),
+                            slug=str(a.get("slug") or ""),
+                            version=a.get("version"),
+                        )
+                    )
+                else:
+                    parsed_addons.append(a)
+        except Exception:
+            parsed_addons = []
+
+    parsed_folders: list[Any] = []
+    if folders:
+        try:
+            from homeassistant.components.backup import Folder
+            for f in folders:
+                try:
+                    parsed_folders.append(Folder(str(f)))
+                except ValueError:
+                    continue
+        except Exception:
+            parsed_folders = []
+
+    candidate_values: dict[str, Any] = {
+        "backup_id": backup_id,
+        "name": name,
+        "date": date,
+        "size": size,
+        "addons": parsed_addons,
+        "database_included": database_included,
+        "extra_metadata": extra_metadata if extra_metadata is not None else {},
+        "folders": parsed_folders,
+        "homeassistant_included": homeassistant_included,
+        "homeassistant_version": homeassistant_version,
+        "protected": protected,
+    }
     try:
         sig = inspect.signature(AgentBackup)
         params = sig.parameters
-        kwargs: dict[str, Any] = {}
-        if "backup_id" in params:
-            kwargs["backup_id"] = backup_id
-        if "name" in params:
-            kwargs["name"] = name
-        if "date" in params:
-            kwargs["date"] = date
-        if "size" in params:
-            kwargs["size"] = size
-        if "addons" in params:
-            kwargs["addons"] = []
-        if "database_included" in params:
-            kwargs["database_included"] = True
-        if "extra_metadata" in params:
-            kwargs["extra_metadata"] = {}
+        if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+            return AgentBackup(**candidate_values)
+        kwargs = {k: v for k, v in candidate_values.items() if k in params}
         return AgentBackup(**kwargs)
     except Exception:
         # Fallback to direct positional or keyword instantiation

@@ -96,7 +96,7 @@ class TestDomolinkBackupArchitecture(unittest.TestCase):
         from custom_components.domolink_backup import async_restore_backup_via_manager
 
         mock_local_agent = MagicMock()
-        mock_local_agent._load_backups = AsyncMock()
+        mock_local_agent.async_list_backups = AsyncMock()
 
         mock_manager = MagicMock()
         mock_manager.backup_agents = {"backup.local": mock_local_agent}
@@ -139,8 +139,8 @@ class TestDomolinkBackupArchitecture(unittest.TestCase):
             )
         )
 
-        # Agent archive list must be refreshed
-        mock_local_agent._load_backups.assert_awaited_once()
+        # Agent archive list must be refreshed via public API
+        mock_local_agent.async_list_backups.assert_awaited_once()
 
         # All keyword-only arguments must be passed correctly
         self.assertEqual(called_kwargs["backup_id"], "slug_12345")
@@ -150,6 +150,120 @@ class TestDomolinkBackupArchitecture(unittest.TestCase):
         self.assertTrue(called_kwargs["restore_database"])
         self.assertIsNone(called_kwargs["restore_folders"])
         self.assertTrue(called_kwargs["restore_homeassistant"])
+
+    def test_extract_core_subfolders_strips_data_prefix(self):
+        """Ensure _sync_extract_core_subfolders strips leading data/ and rewrites member paths into config_dir."""
+        import io
+        import tarfile
+        import tempfile
+        from custom_components.domolink_backup import _sync_extract_core_subfolders
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            outer_tar_path = os.path.join(tmpdir, "backup_test.tar")
+            target_config_dir = os.path.join(tmpdir, "config")
+            os.makedirs(target_config_dir, exist_ok=True)
+
+            # Build inner homeassistant.tar.gz with './data/...' and 'data/...' entries
+            inner_buf = io.BytesIO()
+            with tarfile.open(fileobj=inner_buf, mode="w:gz") as inner_tar:
+                files = {
+                    "./data/custom_components/my_integration/manifest.json": b'{"domain": "my_integration"}',
+                    "data/themes/dark_blue.yaml": b"dark_blue: {}",
+                    "data/configuration.yaml": b"homeassistant: {}",
+                }
+                for name, content in files.items():
+                    info = tarfile.TarInfo(name=name)
+                    info.size = len(content)
+                    inner_tar.addfile(info, io.BytesIO(content))
+            inner_bytes = inner_buf.getvalue()
+
+            with tarfile.open(outer_tar_path, mode="w") as outer_tar:
+                ha_info = tarfile.TarInfo(name="./homeassistant.tar.gz")
+                ha_info.size = len(inner_bytes)
+                outer_tar.addfile(ha_info, io.BytesIO(inner_bytes))
+
+            extracted = _sync_extract_core_subfolders(
+                outer_tar_path,
+                target_config_dir,
+                ["custom_components", "themes", "blueprints"],
+            )
+
+            # Only custom_components and themes were present in the archive
+            self.assertEqual(extracted, ["custom_components", "themes"])
+
+            # Files must land directly inside target_config_dir without 'data/' prefix
+            self.assertTrue(
+                os.path.isfile(os.path.join(target_config_dir, "custom_components", "my_integration", "manifest.json"))
+            )
+            self.assertTrue(
+                os.path.isfile(os.path.join(target_configdir := target_config_dir, "themes", "dark_blue.yaml"))
+            )
+            self.assertFalse(os.path.exists(os.path.join(target_configdir, "data")))
+            self.assertFalse(os.path.exists(os.path.join(target_configdir, "configuration.yaml")))
+
+    def test_upload_backup_to_local_agent_and_direct_get_backup_path(self):
+        """Ensure downloaded archives are registered via async_upload_backup and get_backup_path is used without copying."""
+        import asyncio
+        import tempfile
+        from custom_components.domolink_backup import (
+            async_get_local_agent_backup_path,
+            async_upload_backup_to_local_agent,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tar_file = os.path.join(tmpdir, "sample_backup.tar")
+            payload = b"dummy-tar-content-" * 100
+            with open(tar_file, "wb") as f:
+                f.write(payload)
+
+            uploaded_chunks = bytearray()
+            uploaded_backup_obj = None
+
+            async def mock_upload_backup(*, open_stream, backup, **kwargs):
+                nonlocal uploaded_backup_obj
+                uploaded_backup_obj = backup
+                stream = await open_stream()
+                async for chunk in stream:
+                    uploaded_chunks.extend(chunk)
+
+            mock_local_agent = MagicMock()
+            mock_local_agent.domain = "backup"
+            mock_local_agent.async_upload_backup = mock_upload_backup
+            mock_local_agent.async_list_backups = AsyncMock(return_value=[])
+            mock_local_agent.get_backup_path = MagicMock(return_value=tar_file)
+
+            mock_manager = MagicMock()
+            mock_manager.backup_agents = {"backup.local": mock_local_agent}
+
+            hass = sys.modules["homeassistant.core"].HomeAssistant()
+            hass.async_add_executor_job = AsyncMock(side_effect=lambda fn, *a: fn(*a))
+            hass.services = MagicMock()
+            hass.services.has_service = MagicMock(return_value=False)
+
+            agent_id, slug = asyncio.run(
+                async_upload_backup_to_local_agent(
+                    hass,
+                    tar_file,
+                    backup_id="slug_abc123",
+                    name="Offsite Backup",
+                    date="2026-11-03T12:00:00+00:00",
+                    size=len(payload),
+                    meta={"slug": "slug_abc123", "name": "Offsite Backup"},
+                    backup_manager=mock_manager,
+                )
+            )
+
+            self.assertEqual(agent_id, "backup.local")
+            self.assertEqual(slug, "slug_abc123")
+            self.assertEqual(bytes(uploaded_chunks), payload)
+            self.assertIsNotNone(uploaded_backup_obj)
+            self.assertEqual(uploaded_backup_obj.backup_id, "slug_abc123")
+
+            # Verify async_get_local_agent_backup_path returns the direct path without copying
+            direct_path = asyncio.run(
+                async_get_local_agent_backup_path(mock_manager, "slug_abc123", hass=hass)
+            )
+            self.assertEqual(direct_path, tar_file)
 
     def test_partial_restore_service_dispatch_conditions(self):
         """Ensure hassio.restore_partial is only called when there is work for Supervisor."""
