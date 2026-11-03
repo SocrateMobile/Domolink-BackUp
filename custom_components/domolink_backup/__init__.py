@@ -15,8 +15,9 @@ import logging
 import os
 import shutil
 import tarfile
+import tempfile
 import time
-from typing import Any
+from typing import Any, AsyncIterator
 
 import aiohttp
 
@@ -45,6 +46,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from .backup import (
     DomoLinkBackupAgent,
     HAS_BACKUP_AGENT,
+    _create_agent_backup,
     notify_backup_agents_updated,
 )
 from .const import (
@@ -549,6 +551,24 @@ def _sync_check_file(path: str) -> tuple[bool, int]:
     return False, 0
 
 
+async def _async_get_backup_manager(hass: HomeAssistant) -> Any:
+    """Retrieve the Home Assistant BackupManager instance."""
+    backup_manager = None
+    try:
+        from homeassistant.components.backup import async_get_manager
+        mgr = async_get_manager(hass)
+        backup_manager = await mgr if inspect.isawaitable(mgr) else mgr
+    except Exception:
+        pass
+    if not backup_manager:
+        try:
+            from homeassistant.components.backup.const import DATA_MANAGER
+            backup_manager = hass.data.get(DATA_MANAGER) or hass.data.get("backup")
+        except Exception:
+            backup_manager = hass.data.get("backup")
+    return backup_manager
+
+
 async def _async_get_local_backups_map(backup_manager: Any) -> dict[str, Any]:
     """Retrieve known backups dict {backup_id: backup_obj} from local BackupAgents or BackupManager.
 
@@ -566,11 +586,6 @@ async def _async_get_local_backups_map(backup_manager: Any) -> dict[str, Any]:
         for agent_id, agent in list(agents_dict.items()):
             if getattr(agent, "domain", None) == DOMAIN or str(agent_id).startswith(f"{DOMAIN}."):
                 continue
-            if hasattr(agent, "_load_backups"):
-                try:
-                    await agent._load_backups()
-                except Exception:
-                    pass
             if hasattr(agent, "async_list_backups"):
                 try:
                     queried_any_local = True
@@ -692,6 +707,50 @@ async def _async_call_backup_service(
     return await hass.services.async_call(domain, service, service_data, blocking=True)
 
 
+async def async_get_local_agent_backup_path(
+    backup_manager: Any,
+    backup_id: str,
+    hass: HomeAssistant | None = None,
+) -> str | None:
+    """Return the direct file path from a LocalBackupAgent (e.g. backup.local) without copying it."""
+    hass_obj = hass or getattr(backup_manager, "hass", None)
+    if not backup_manager and hass_obj:
+        backup_manager = await _async_get_backup_manager(hass_obj)
+    if not backup_manager:
+        return None
+
+    raw_agents_dict = (
+        backup_manager.backup_agents
+        if hasattr(backup_manager, "backup_agents") and isinstance(backup_manager.backup_agents, dict)
+        else (
+            backup_manager._backup_agents
+            if hasattr(backup_manager, "_backup_agents") and isinstance(backup_manager._backup_agents, dict)
+            else {}
+        )
+    )
+    run_in_exec = (
+        hass_obj.async_add_executor_job
+        if hass_obj
+        else lambda fn, *a: asyncio.get_running_loop().run_in_executor(None, fn, *a)
+    )
+
+    for agent_id, agent in raw_agents_dict.items():
+        if getattr(agent, "domain", None) == DOMAIN or str(agent_id).startswith(f"{DOMAIN}."):
+            continue
+        if hasattr(agent, "get_backup_path"):
+            try:
+                if hasattr(agent, "async_list_backups"):
+                    await agent.async_list_backups()
+                local_p = str(agent.get_backup_path(backup_id))
+                exists, sz = await run_in_exec(_sync_check_file, local_p)
+                if exists and sz > 0:
+                    return local_p
+            except Exception as err:
+                _LOGGER.debug("DomoLink-BackUp: get_backup_path notice sur %s: %s", agent_id, err)
+
+    return None
+
+
 async def async_download_backup_via_manager(
     backup_manager: Any,
     backup_id: str,
@@ -702,12 +761,7 @@ async def async_download_backup_via_manager(
     hass_obj = hass or getattr(backup_manager, "hass", None)
 
     if not backup_manager and hass_obj:
-        try:
-            from homeassistant.components.backup import async_get_manager
-            mgr = async_get_manager(hass_obj)
-            backup_manager = await mgr if inspect.isawaitable(mgr) else mgr
-        except Exception as err:
-            _LOGGER.debug("DomoLink-BackUp: Impossible d'obtenir BackupManager: %s", err)
+        backup_manager = await _async_get_backup_manager(hass_obj)
 
     if not backup_manager:
         return False
@@ -761,11 +815,51 @@ async def async_download_backup_via_manager(
     )
 
     for agent in agents:
-        # 1. Support LocalBackupAgent (e.g., backup.local on Core/Container) via get_backup_path
+        # 1. Stream via async_download_backup (e.g., hassio.local on HAOS / Supervised)
+        if hasattr(agent, "async_download_backup"):
+            try:
+                stream = await agent.async_download_backup(backup_id)
+                if stream is not None:
+                    await run_in_exec(lambda: os.makedirs(target_dir, exist_ok=True))
+                    f_out = await run_in_exec(open, target_path, "wb")
+                    buf = bytearray()
+                    flush_threshold = 4 * 1024 * 1024  # 4 MB buffer to avoid per-chunk thread hops
+                    try:
+                        async for chunk in stream:
+                            if chunk:
+                                buf.extend(chunk)
+                                if len(buf) >= flush_threshold:
+                                    data_to_write = bytes(buf)
+                                    buf.clear()
+                                    await run_in_exec(f_out.write, data_to_write)
+                        if buf:
+                            data_to_write = bytes(buf)
+                            buf.clear()
+                            await run_in_exec(f_out.write, data_to_write)
+                    finally:
+                        await run_in_exec(f_out.close)
+
+                    is_valid, _ = await run_in_exec(_sync_check_file, target_path)
+                    if is_valid:
+                        _LOGGER.info(
+                            "DomoLink-BackUp: Archive '%s' téléchargée avec succès via l'agent %s",
+                            backup_id,
+                            getattr(agent, "agent_id", type(agent).__name__),
+                        )
+                        return True
+            except Exception as err:
+                _LOGGER.debug(
+                    "DomoLink-BackUp: Échec du téléchargement via l'agent %s pour %s: %s",
+                    getattr(agent, "agent_id", type(agent).__name__),
+                    backup_id,
+                    err,
+                )
+
+        # 2. Fallback to LocalBackupAgent.get_backup_path if async_download_backup is not implemented
         if hasattr(agent, "get_backup_path"):
             try:
-                if hasattr(agent, "_load_backups"):
-                    await agent._load_backups()
+                if hasattr(agent, "async_list_backups"):
+                    await agent.async_list_backups()
                 local_p = str(agent.get_backup_path(backup_id))
                 exists, sz = await run_in_exec(_sync_check_file, local_p)
                 if exists and sz > 0:
@@ -778,51 +872,118 @@ async def async_download_backup_via_manager(
             except Exception as err:
                 _LOGGER.debug("DomoLink-BackUp: get_backup_path notice sur %s: %s", agent, err)
 
-        # 2. Stream via async_download_backup (e.g., hassio.local on HAOS / Supervised)
-        if not hasattr(agent, "async_download_backup"):
-            continue
-        try:
-            stream = await agent.async_download_backup(backup_id)
-            if stream is None:
-                continue
-
-            await run_in_exec(lambda: os.makedirs(target_dir, exist_ok=True))
-            f_out = await run_in_exec(open, target_path, "wb")
-            buf = bytearray()
-            flush_threshold = 4 * 1024 * 1024  # 4 MB buffer to avoid per-chunk thread hops
-            try:
-                async for chunk in stream:
-                    if chunk:
-                        buf.extend(chunk)
-                        if len(buf) >= flush_threshold:
-                            data_to_write = bytes(buf)
-                            buf.clear()
-                            await run_in_exec(f_out.write, data_to_write)
-                if buf:
-                    data_to_write = bytes(buf)
-                    buf.clear()
-                    await run_in_exec(f_out.write, data_to_write)
-            finally:
-                await run_in_exec(f_out.close)
-
-            is_valid, _ = await run_in_exec(_sync_check_file, target_path)
-            if is_valid:
-                _LOGGER.info(
-                    "DomoLink-BackUp: Archive '%s' téléchargée avec succès via l'agent %s",
-                    backup_id,
-                    getattr(agent, "agent_id", type(agent).__name__),
-                )
-                return True
-        except Exception as err:
-            _LOGGER.debug(
-                "DomoLink-BackUp: Échec du téléchargement via l'agent %s pour %s: %s",
-                getattr(agent, "agent_id", type(agent).__name__),
-                backup_id,
-                err,
-            )
-            continue
-
     return False
+
+
+async def async_upload_backup_to_local_agent(
+    hass: HomeAssistant,
+    tar_path: str,
+    *,
+    backup_id: str,
+    name: str,
+    date: str,
+    size: int,
+    meta: dict[str, Any] | None = None,
+    backup_manager: Any | None = None,
+) -> tuple[str | None, str]:
+    """Hand a downloaded backup archive to the local BackupAgent (hassio.local or backup.local)
+    via its public async_upload_backup(open_stream=..., backup=...) method.
+
+    Returns (agent_id, backup_id).
+    """
+    if not backup_manager:
+        backup_manager = await _async_get_backup_manager(hass)
+
+    local_agent = None
+    selected_agent_id: str | None = None
+
+    if backup_manager:
+        agents_dict = (
+            backup_manager.backup_agents
+            if hasattr(backup_manager, "backup_agents") and isinstance(backup_manager.backup_agents, dict)
+            else (
+                backup_manager._backup_agents
+                if hasattr(backup_manager, "_backup_agents") and isinstance(backup_manager._backup_agents, dict)
+                else {}
+            )
+        )
+        # Prefer hassio.local on Supervisor installations, and backup.local on Core/Container
+        preferred_ids = (
+            ("hassio.local", "backup.local")
+            if hass.services.has_service("hassio", "restore_full")
+            else ("backup.local", "hassio.local")
+        )
+        for pref_id in preferred_ids:
+            if pref_id in agents_dict and hasattr(agents_dict[pref_id], "async_upload_backup"):
+                local_agent = agents_dict[pref_id]
+                selected_agent_id = pref_id
+                break
+
+        if not local_agent:
+            for ag_id, ag in agents_dict.items():
+                if getattr(ag, "domain", None) == DOMAIN or str(ag_id).startswith(f"{DOMAIN}."):
+                    continue
+                if hasattr(ag, "async_upload_backup"):
+                    local_agent = ag
+                    selected_agent_id = str(ag_id)
+                    break
+
+    if not local_agent or not selected_agent_id:
+        return None, backup_id
+
+    meta = meta or {}
+    ha_meta = meta.get("homeassistant")
+    if isinstance(ha_meta, dict):
+        ha_included = True
+        ha_version = ha_meta.get("version")
+        db_included = not bool(ha_meta.get("exclude_database", False))
+    else:
+        ha_included = bool(ha_meta) if "homeassistant" in meta else True
+        ha_version = getattr(hass.config, "version", None)
+        db_included = True
+
+    agent_backup = _create_agent_backup(
+        backup_id=backup_id,
+        name=name,
+        date=date,
+        size=size,
+        addons=meta.get("addons") if isinstance(meta.get("addons"), list) else [],
+        database_included=db_included,
+        extra_metadata=meta.get("extra") if isinstance(meta.get("extra"), dict) else {},
+        folders=meta.get("folders") if isinstance(meta.get("folders"), list) else [],
+        homeassistant_included=ha_included,
+        homeassistant_version=str(ha_version) if ha_version else None,
+        protected=bool(meta.get("protected", False)),
+    )
+
+    async def _open_stream() -> AsyncIterator[bytes]:
+        async def _chunk_generator() -> AsyncIterator[bytes]:
+            def _open_file():
+                return open(tar_path, "rb")
+
+            f_in = await hass.async_add_executor_job(_open_file)
+            try:
+                while True:
+                    chunk = await hass.async_add_executor_job(f_in.read, 4 * 1024 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                await hass.async_add_executor_job(f_in.close)
+
+        return _chunk_generator()
+
+    await local_agent.async_upload_backup(
+        open_stream=_open_stream,
+        backup=agent_backup,
+    )
+    _LOGGER.info(
+        "DomoLink-BackUp: Archive '%s' (slug: %s) enregistrée auprès de l'agent '%s' via async_upload_backup",
+        name,
+        backup_id,
+        selected_agent_id,
+    )
+    return selected_agent_id, backup_id
 
 
 async def async_restore_backup_via_manager(
@@ -836,30 +997,23 @@ async def async_restore_backup_via_manager(
     restore_folders: list[Any] | None = None,
     restore_homeassistant: bool = True,
 ) -> None:
-    """Restore a backup archive via BackupManager ensuring the agent knows the archive."""
-    # 1. Ensure the agent holding the backup (backup.local) has loaded/scanned disk archives
+    """Restore a backup archive via BackupManager from the specified backup agent."""
+    # 1. Refresh backup list via public agent/manager APIs
     agents = getattr(backup_manager, "backup_agents", {})
     local_agent = agents.get(agent_id) if isinstance(agents, dict) else None
-    if local_agent:
-        if hasattr(local_agent, "_load_backups"):
-            try:
-                await local_agent._load_backups()
-            except Exception as load_err:
-                _LOGGER.debug("DomoLink-BackUp: Erreur _load_backups sur %s: %s", agent_id, load_err)
-        elif hasattr(local_agent, "async_list_backups"):
-            try:
-                await local_agent.async_list_backups()
-            except Exception as list_err:
-                _LOGGER.debug("DomoLink-BackUp: Erreur async_list_backups sur %s: %s", agent_id, list_err)
+    if local_agent and hasattr(local_agent, "async_list_backups"):
+        try:
+            await local_agent.async_list_backups()
+        except Exception as list_err:
+            _LOGGER.debug("DomoLink-BackUp: Erreur async_list_backups sur %s: %s", agent_id, list_err)
 
-    # 2. Refresh known backups in BackupManager if available
     if hasattr(backup_manager, "async_get_backups"):
         try:
             await backup_manager.async_get_backups()
         except Exception:
             pass
 
-    # 3. Call BackupManager.async_restore_backup with all required keyword-only arguments
+    # 2. Call BackupManager.async_restore_backup with all required keyword-only arguments
     await backup_manager.async_restore_backup(
         backup_id,
         agent_id=agent_id,
@@ -888,8 +1042,14 @@ def _sync_read_tar_backup_json(tar_path: str) -> dict[str, Any]:
 
 
 def _sync_extract_core_subfolders(tar_path: str, target_config_dir: str, subfolders: list[str]) -> list[str]:
-    """Safely extract specific subfolders (custom_components, themes, blueprints) from homeassistant.tar.gz."""
-    extracted = []
+    """Safely extract specific subfolders (custom_components, themes, blueprints) from homeassistant.tar.gz.
+
+    Home Assistant and Supervisor write homeassistant.tar.gz with every file under a
+    leading 'data/' prefix (e.g. 'data/custom_components/...', './data/themes/...').
+    This function strips the leading 'data/' before matching against subfolders and
+    rewrites member.name so extracted files land directly inside target_config_dir.
+    """
+    extracted: list[str] = []
     try:
         with tarfile.open(tar_path, "r:*") as outer_tar:
             ha_tar_member = None
@@ -911,8 +1071,15 @@ def _sync_extract_core_subfolders(tar_path: str, target_config_dir: str, subfold
                 members_to_extract = []
                 for member in inner_tar.getmembers():
                     clean_name = member.name.lstrip("./")
+                    if clean_name == "data":
+                        continue
+                    if clean_name.startswith("data/"):
+                        clean_name = clean_name[len("data/"):].lstrip("/")
+                    if not clean_name or os.path.isabs(clean_name) or ".." in clean_name.split("/"):
+                        continue
                     for sub in subfolders:
                         if clean_name == sub or clean_name.startswith(f"{sub}/"):
+                            member.name = clean_name
                             members_to_extract.append(member)
                             if sub not in extracted:
                                 extracted.append(sub)
@@ -1602,12 +1769,26 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         _LOGGER.debug("DomoLink-BackUp: Erreur détection slug via agents: %s", err)
 
                 # If detected_slug is known and backup_task is done (or not running):
-                # In HAOS / Supervised, the archive lives in Supervisor storage and is streamed via BackupManager.
                 if detected_slug and (backup_task is None or backup_task.done()):
+                    # 1. If a local BackupAgent (e.g. backup.local on Core/Container) holds the file on disk,
+                    # use get_backup_path() directly without creating a duplicate copy!
+                    if backup_manager:
+                        direct_local_path = await async_get_local_agent_backup_path(
+                            backup_manager, detected_slug, hass=self.hass
+                        )
+                        if direct_local_path:
+                            ex_ok, ex_sz = await self.hass.async_add_executor_job(
+                                _sync_check_file, direct_local_path
+                            )
+                            if ex_ok and ex_sz > 500:
+                                new_file = direct_local_path
+                                file_size = ex_sz
+                                break
+
                     target_dl_dir = self.hass.config.path("backups")
                     dl_tar_path = os.path.join(target_dl_dir, f"{detected_slug}.tar")
 
-                    # Check if file already exists in any watched directory
+                    # 2. Check if {detected_slug}.tar already exists in any watched directory
                     found_existing_tar = None
                     found_existing_sz = 0
                     for d_cand in existing_dirs:
@@ -1623,7 +1804,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         file_size = found_existing_sz
                         break
 
-                    # Download via BackupManager stream
+                    # 3. Download via BackupManager stream into a temporary file (cleaned up on all install types)
                     if backup_manager:
                         self.update_progress(
                             STAGE_CREATING_LOCAL,
@@ -1639,8 +1820,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         if dl_ok and dl_exists and dl_sz > 0:
                             new_file = dl_tar_path
                             file_size = dl_sz
-                            if self.hass.services.has_service("hassio", "backup_full"):
-                                temp_downloaded_tar = dl_tar_path
+                            temp_downloaded_tar = dl_tar_path
                             self.data["local_backup_path"] = target_dl_dir
                             self.update_progress(
                                 STAGE_CREATING_LOCAL,
@@ -1769,7 +1949,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
 
             if not new_file and backup_manager:
-                # Fallback 3: direct download stream from BackupManager
+                # Fallback 3: direct path or download stream from BackupManager
                 try:
                     target_slug = detected_slug
                     if not target_slug:
@@ -1779,32 +1959,43 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         )
 
                     if target_slug:
-                        self.update_progress(
-                            STAGE_CREATING_LOCAL,
-                            45,
-                            "Téléchargement de l'archive",
-                            f"Récupération de l'archive {target_slug}...",
-                            log_msg=f"Flux direct : récupération de l'archive '{target_slug}' via BackupManager...",
+                        direct_local_path = await async_get_local_agent_backup_path(
+                            backup_manager, target_slug, hass=self.hass
                         )
-                        target_dl_dir = self.hass.config.path("backups")
-                        dl_tar_path = os.path.join(target_dl_dir, f"{target_slug}.tar")
-                        dl_ok = await async_download_backup_via_manager(
-                            backup_manager, target_slug, dl_tar_path, hass=self.hass
-                        )
-                        dl_exists, dl_sz = await self.hass.async_add_executor_job(_sync_check_file, dl_tar_path)
-                        if dl_ok and dl_exists and dl_sz > 0:
-                            new_file = dl_tar_path
-                            file_size = dl_sz
-                            if self.hass.services.has_service("hassio", "backup_full"):
-                                temp_downloaded_tar = dl_tar_path
-                            self.data["local_backup_path"] = target_dl_dir
+                        if direct_local_path:
+                            ex_ok, ex_sz = await self.hass.async_add_executor_job(
+                                _sync_check_file, direct_local_path
+                            )
+                            if ex_ok and ex_sz > 500:
+                                new_file = direct_local_path
+                                file_size = ex_sz
+
+                        if not new_file:
                             self.update_progress(
                                 STAGE_CREATING_LOCAL,
-                                48,
-                                "Archive récupérée",
-                                f"{round(file_size / (1024*1024), 2)} Mo",
-                                log_msg=f"✓ Archive récupérée avec succès ({round(file_size / (1024*1024), 2)} Mo)",
+                                45,
+                                "Téléchargement de l'archive",
+                                f"Récupération de l'archive {target_slug}...",
+                                log_msg=f"Flux direct : récupération de l'archive '{target_slug}' via BackupManager...",
                             )
+                            target_dl_dir = self.hass.config.path("backups")
+                            dl_tar_path = os.path.join(target_dl_dir, f"{target_slug}.tar")
+                            dl_ok = await async_download_backup_via_manager(
+                                backup_manager, target_slug, dl_tar_path, hass=self.hass
+                            )
+                            dl_exists, dl_sz = await self.hass.async_add_executor_job(_sync_check_file, dl_tar_path)
+                            if dl_ok and dl_exists and dl_sz > 0:
+                                new_file = dl_tar_path
+                                file_size = dl_sz
+                                temp_downloaded_tar = dl_tar_path
+                                self.data["local_backup_path"] = target_dl_dir
+                                self.update_progress(
+                                    STAGE_CREATING_LOCAL,
+                                    48,
+                                    "Archive récupérée",
+                                    f"{round(file_size / (1024*1024), 2)} Mo",
+                                    log_msg=f"✓ Archive récupérée avec succès ({round(file_size / (1024*1024), 2)} Mo)",
+                                )
                 except Exception as dl_err:
                     _LOGGER.warning("DomoLink-BackUp: Échec téléchargement via backup manager: %s", dl_err)
 
@@ -2184,9 +2375,10 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             total_bytes=expected_size,
         )
 
-        target_dl_dir = self.hass.config.path("backups")
-        await self.hass.async_add_executor_job(_sync_ensure_dir, target_dl_dir)
-        local_dest = os.path.join(target_dl_dir, clean_filename)
+        temp_restore_dir = await self.hass.async_add_executor_job(
+            tempfile.mkdtemp, "domolink_restore_"
+        )
+        local_dest = os.path.join(temp_restore_dir, clean_filename)
 
         dl_start = time.monotonic()
         last_log = 0.0
@@ -2240,7 +2432,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
 
         try:
-            # 1. Download file to local_dest
+            # 1. Download file to temporary staging path local_dest
             success = await self.storage_engine.async_download_to_file(
                 clean_filename, local_dest, on_progress=_on_download_progress
             )
@@ -2253,32 +2445,40 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # 2. Inspect archive internal backup.json to get slug and metadata
             meta = await self.hass.async_add_executor_job(_sync_read_tar_backup_json, local_dest)
             internal_slug = meta.get("slug")
+            target_slug = str(internal_slug or clean_filename.removesuffix(".tar"))
             backup_display_name = meta.get("name") or clean_filename
+            backup_date = (
+                meta.get("date")
+                or (target.get("date") if target else None)
+                or datetime.now(timezone.utc).isoformat()
+            )
 
             self.update_progress(
                 STAGE_VERIFYING,
                 85,
                 "Archive vérifiée",
                 f"{backup_display_name} ({final_mb} Mo)",
-                log_msg=f"✓ Archive rapatriée avec succès : {final_mb} Mo (Slug détecté : {internal_slug or 'aucun'})",
+                log_msg=f"✓ Archive rapatriée avec succès : {final_mb} Mo (Slug détecté : {target_slug})",
             )
 
-            # Also ensure a copy exists with {internal_slug}.tar if slug is known
-            if internal_slug and internal_slug != clean_filename.removesuffix(".tar"):
-                slug_tar = os.path.join(target_dl_dir, f"{internal_slug}.tar")
-                slug_exists = await self.hass.async_add_executor_job(os.path.exists, slug_tar)
-                if not slug_exists:
-                    try:
-                        import shutil
-                        await self.hass.async_add_executor_job(shutil.copy2, local_dest, slug_tar)
-                    except Exception as copy_err:
-                        _LOGGER.debug("DomoLink-BackUp: Copie slug .tar: %s", copy_err)
+            # 3. Hand the archive to the local backup agent (hassio.local on Supervisor, backup.local on Core)
+            # through its public async_upload_backup(open_stream=..., backup=...) API
+            b_mgr = await _async_get_backup_manager(self.hass)
+            registered_agent_id, target_slug = await async_upload_backup_to_local_agent(
+                self.hass,
+                local_dest,
+                backup_id=target_slug,
+                name=backup_display_name,
+                date=str(backup_date),
+                size=final_size,
+                meta=meta,
+                backup_manager=b_mgr,
+            )
 
             elapsed_total = round(time.monotonic() - start_time, 1)
 
-            # 4. If mode is full_restore, trigger the actual restoration
+            # 4. If mode is full_restore, trigger the actual restoration from that agent
             if restore_mode == "full_restore":
-                target_slug = internal_slug or clean_filename.removesuffix(".tar")
                 self.set_status(
                     STATE_RESTORING,
                     f"Restauration de '{backup_display_name}'...",
@@ -2302,26 +2502,12 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     )
                 else:
                     # Installation without Supervisor -> BackupManager.async_restore_backup
-                    b_mgr = None
-                    try:
-                        from homeassistant.components.backup import async_get_manager
-                        mgr = async_get_manager(self.hass)
-                        b_mgr = await mgr if inspect.isawaitable(mgr) else mgr
-                    except Exception as err:
-                        _LOGGER.debug("DomoLink-BackUp: Impossible d'obtenir BackupManager: %s", err)
-                    if not b_mgr:
-                        try:
-                            from homeassistant.components.backup.const import DATA_MANAGER
-                            b_mgr = self.hass.data.get(DATA_MANAGER) or self.hass.data.get("backup")
-                        except Exception:
-                            pass
-
                     if b_mgr and hasattr(b_mgr, "async_restore_backup"):
                         _LOGGER.info("DomoLink-BackUp: Appel BackupManager.async_restore_backup pour slug %s", target_slug)
                         await async_restore_backup_via_manager(
                             b_mgr,
                             target_slug,
-                            agent_id="backup.local",
+                            agent_id=registered_agent_id or "backup.local",
                             password=None,
                             restore_addons=None,
                             restore_database=True,
@@ -2352,7 +2538,6 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             # 5. If mode is partial_restore, trigger partial restoration
             elif restore_mode in ("partial_restore", RESTORE_MODE_PARTIAL):
-                target_slug = internal_slug or clean_filename.removesuffix(".tar")
                 self.set_status(
                     STATE_RESTORING,
                     f"Restauration partielle de '{backup_display_name}'...",
@@ -2369,6 +2554,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 await self.notifier.async_notify_start(f"Restauration partielle : {backup_display_name}", "Home Assistant (Système)")
 
                 # If restore_homeassistant is False, extract selected subfolders on BOTH install types
+                extracted_subfolders: list[str] = []
                 if not restore_homeassistant:
                     subfolders_to_extract = []
                     if restore_integrations:
@@ -2380,10 +2566,10 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                     if subfolders_to_extract:
                         config_dir = self.hass.config.config_dir
-                        extracted = await self.hass.async_add_executor_job(
+                        extracted_subfolders = await self.hass.async_add_executor_job(
                             _sync_extract_core_subfolders, local_dest, config_dir, subfolders_to_extract
                         )
-                        _LOGGER.info("DomoLink-BackUp: Éléments extraits directement dans config: %s", extracted)
+                        _LOGGER.info("DomoLink-BackUp: Éléments extraits directement dans config: %s", extracted_subfolders)
 
                 # Supervisor restore: only call hassio.restore_partial when there is something for Supervisor to restore
                 if self.hass.services.has_service("hassio", "restore_partial"):
@@ -2408,26 +2594,12 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 else:
                     # Installation without Supervisor
                     if restore_homeassistant:
-                        b_mgr = None
-                        try:
-                            from homeassistant.components.backup import async_get_manager
-                            mgr = async_get_manager(self.hass)
-                            b_mgr = await mgr if inspect.isawaitable(mgr) else mgr
-                        except Exception as err:
-                            _LOGGER.debug("DomoLink-BackUp: Impossible d'obtenir BackupManager: %s", err)
-                        if not b_mgr:
-                            try:
-                                from homeassistant.components.backup.const import DATA_MANAGER
-                                b_mgr = self.hass.data.get(DATA_MANAGER) or self.hass.data.get("backup")
-                            except Exception:
-                                pass
-
                         if b_mgr and hasattr(b_mgr, "async_restore_backup"):
                             _LOGGER.info("DomoLink-BackUp: Appel BackupManager.async_restore_backup pour slug %s", target_slug)
                             await async_restore_backup_via_manager(
                                 b_mgr,
                                 target_slug,
-                                agent_id="backup.local",
+                                agent_id=registered_agent_id or "backup.local",
                                 password=None,
                                 restore_addons=None,
                                 restore_database=True,
@@ -2452,9 +2624,9 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "components": [
                         f"Slug: {target_slug}",
                         f"Home Assistant Core: {'Inclus' if restore_homeassistant else 'Exclu'}",
-                        f"Intégrations (custom_components): {'Restaurées' if (restore_homeassistant or restore_integrations) else 'Exclues'}",
-                        f"Thèmes Lovelace: {'Restaurés' if (restore_homeassistant or restore_themes) else 'Exclus'}",
-                        f"Blueprints: {'Restaurés' if (restore_homeassistant or restore_blueprints) else 'Exclus'}",
+                        f"Intégrations (custom_components): {'Restaurées' if (restore_homeassistant or 'custom_components' in extracted_subfolders) else 'Exclues'}",
+                        f"Thèmes Lovelace: {'Restaurés' if (restore_homeassistant or 'themes' in extracted_subfolders) else 'Exclus'}",
+                        f"Blueprints: {'Restaurés' if (restore_homeassistant or 'blueprints' in extracted_subfolders) else 'Exclus'}",
                         f"Add-ons restaurés: {len(restore_addons) if restore_addons else '0'}",
                         f"Dossiers restaurés: {len(restore_folders) if restore_folders else '0'}",
                     ],
@@ -2466,17 +2638,22 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             # Otherwise (download_only):
             self.set_status(STATE_SUCCESS, f"Rapatriement réussi ({final_mb} Mo)", is_busy=False)
+            agent_status = (
+                f"Enregistré auprès de l'agent {registered_agent_id}"
+                if registered_agent_id
+                else "Téléchargé"
+            )
             restore_report = {
                 "operation": "Rapatriement vers Home Assistant",
                 "backup_name": backup_display_name,
-                "destination": "Stockage local (/config/backups)",
+                "destination": f"Agent de sauvegarde ({registered_agent_id or 'local'})",
                 "source_path": f"{dest_label}/{clean_filename}",
                 "size_bytes": final_size,
                 "size_mb": final_mb,
                 "duration_sec": elapsed_total,
                 "duration_formatted": f"{int(elapsed_total // 60)}m {int(elapsed_total % 60)}s" if elapsed_total >= 60 else f"{elapsed_total}s",
                 "compression_ratio": "Archive .tar d'origine",
-                "components": [f"Slug détecté: {internal_slug or 'aucun'}", "Statut: Enregistré dans Supervisor"],
+                "components": [f"Slug: {target_slug}", f"Statut: {agent_status}"],
             }
             self.data["last_report"] = restore_report
             self.data["progress"]["report"] = restore_report
@@ -2511,6 +2688,13 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             await self.notifier.async_notify_error(f"Restauration: {clean_filename}", dest_label, str(err))
             return False
+        finally:
+            try:
+                await self.hass.async_add_executor_job(
+                    lambda d=temp_restore_dir: shutil.rmtree(d, ignore_errors=True)
+                )
+            except Exception as cleanup_err:
+                _LOGGER.debug("DomoLink-BackUp: Nettoyage dossier temporaire %s: %s", temp_restore_dir, cleanup_err)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
