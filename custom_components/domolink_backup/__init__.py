@@ -756,6 +756,7 @@ async def async_download_backup_via_manager(
     backup_id: str,
     target_path: str,
     hass: HomeAssistant | None = None,
+    on_progress: Any = None,
 ) -> bool:
     """Download a backup archive via Home Assistant BackupAgent stream or local path."""
     hass_obj = hass or getattr(backup_manager, "hass", None)
@@ -823,6 +824,7 @@ async def async_download_backup_via_manager(
                     await run_in_exec(lambda: os.makedirs(target_dir, exist_ok=True))
                     f_out = await run_in_exec(open, target_path, "wb")
                     buf = bytearray()
+                    total_written = 0
                     flush_threshold = 4 * 1024 * 1024  # 4 MB buffer to avoid per-chunk thread hops
                     try:
                         async for chunk in stream:
@@ -832,10 +834,22 @@ async def async_download_backup_via_manager(
                                     data_to_write = bytes(buf)
                                     buf.clear()
                                     await run_in_exec(f_out.write, data_to_write)
+                                    total_written += len(data_to_write)
+                                    if callable(on_progress):
+                                        try:
+                                            on_progress(total_written)
+                                        except Exception:
+                                            pass
                         if buf:
                             data_to_write = bytes(buf)
                             buf.clear()
                             await run_in_exec(f_out.write, data_to_write)
+                            total_written += len(data_to_write)
+                            if callable(on_progress):
+                                try:
+                                    on_progress(total_written)
+                                except Exception:
+                                    pass
                     finally:
                         await run_in_exec(f_out.close)
 
@@ -1813,8 +1827,29 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             f"Récupération de l'archive {detected_slug}...",
                             log_msg=f"⬇️ Récupération du flux de l'archive '{detected_slug}' via BackupManager...",
                         )
+                        last_dl_log = 0.0
+                        def _on_dl_progress(bytes_dl: int) -> None:
+                            nonlocal last_dl_log
+                            now_m = time.monotonic()
+                            if (now_m - last_dl_log) >= 1.5:
+                                last_dl_log = now_m
+                                mb_dl = round(bytes_dl / (1024 * 1024), 1)
+                                pct_dl = min(47, 42 + int(mb_dl / 250))
+                                self.update_progress(
+                                    STAGE_CREATING_LOCAL,
+                                    pct_dl,
+                                    "Récupération de l'archive",
+                                    f"Transfert depuis Supervisor : {mb_dl} Mo...",
+                                    log_msg=f"Récupération du flux en cours : {mb_dl} Mo reçus...",
+                                    log_tag="poll_progress",
+                                )
+
                         dl_ok = await async_download_backup_via_manager(
-                            backup_manager, detected_slug, dl_tar_path, hass=self.hass
+                            backup_manager,
+                            detected_slug,
+                            dl_tar_path,
+                            hass=self.hass,
+                            on_progress=_on_dl_progress,
                         )
                         dl_exists, dl_sz = await self.hass.async_add_executor_job(_sync_check_file, dl_tar_path)
                         if dl_ok and dl_exists and dl_sz > 0:
