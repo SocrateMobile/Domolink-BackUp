@@ -1,5 +1,10 @@
 # 💾 DomoLink-BackUp pour Home Assistant
 
+[![Documentation Officielle](https://img.shields.io/badge/Documentation-socratemobile.fr-06b6d4.svg?logo=googlechrome&logoColor=white)](https://socratemobile.fr/integration.html?id=domolink-backup)
+
+> 🌐 **Site officiel & Documentation complète** : Retrouvez le guide d'installation pas à pas, les entités supportées et les exemples d'automatisations sur [socratemobile.fr](https://socratemobile.fr/integration.html?id=domolink-backup).
+
+
 [![HACS Compatible](https://img.shields.io/badge/HACS-Custom-blue.svg)](https://github.com/SocrateMobile/Domolink-BackUp)
 [![Version](https://img.shields.io/badge/version-1.5.23-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
