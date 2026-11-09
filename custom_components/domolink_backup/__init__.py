@@ -868,6 +868,10 @@ async def async_download_backup_via_manager(
                     backup_id,
                     err,
                 )
+                try:
+                    await run_in_exec(lambda p=target_path: os.remove(p) if os.path.isfile(p) else None)
+                except Exception:
+                    pass
 
         # 2. Fallback to LocalBackupAgent.get_backup_path if async_download_backup is not implemented
         if hasattr(agent, "get_backup_path"):
@@ -877,9 +881,12 @@ async def async_download_backup_via_manager(
                 local_p = str(agent.get_backup_path(backup_id))
                 exists, sz = await run_in_exec(_sync_check_file, local_p)
                 if exists and sz > 0:
-                    if os.path.abspath(local_p) != os.path.abspath(target_path):
-                        await run_in_exec(lambda: os.makedirs(target_dir, exist_ok=True))
-                        await run_in_exec(shutil.copy2, local_p, target_path)
+                    def _sync_copy_if_needed(src: str, dst: str, dst_dir: str) -> None:
+                        if os.path.abspath(src) != os.path.abspath(dst):
+                            os.makedirs(dst_dir, exist_ok=True)
+                            shutil.copy2(src, dst)
+
+                    await run_in_exec(_sync_copy_if_needed, local_p, target_path, target_dir)
                     is_valid, _ = await run_in_exec(_sync_check_file, target_path)
                     if is_valid:
                         return True
@@ -2015,6 +2022,7 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             )
                             target_dl_dir = self.hass.config.path("backups")
                             dl_tar_path = os.path.join(target_dl_dir, f"{target_slug}.tar")
+                            temp_downloaded_tar = dl_tar_path
                             dl_ok = await async_download_backup_via_manager(
                                 backup_manager, target_slug, dl_tar_path, hass=self.hass
                             )
@@ -2022,7 +2030,6 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             if dl_ok and dl_exists and dl_sz > 0:
                                 new_file = dl_tar_path
                                 file_size = dl_sz
-                                temp_downloaded_tar = dl_tar_path
                                 self.data["local_backup_path"] = target_dl_dir
                                 self.update_progress(
                                     STAGE_CREATING_LOCAL,
@@ -2246,6 +2253,23 @@ class DomoLinkBackupCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_upload_file(self, file_path: str) -> bool:
         """Upload an existing tar archive file to remote destination."""
+        # Security: ensure file_path is within an allowed path or standard backup directories
+        backup_dir = self.hass.config.path("backups")
+        is_safe = False
+        try:
+            if hasattr(self.hass.config, "is_allowed_path") and self.hass.config.is_allowed_path(file_path):
+                is_safe = True
+            else:
+                is_safe = await self.hass.async_add_executor_job(
+                    lambda: os.path.commonpath([os.path.abspath(file_path), os.path.abspath(backup_dir)]) == os.path.abspath(backup_dir)
+                )
+        except Exception:
+            is_safe = False
+
+        if not is_safe:
+            _LOGGER.error("DomoLink-BackUp: Chemin de fichier non autorisé : %s", file_path)
+            return False
+
         file_exists = await self.hass.async_add_executor_job(os.path.exists, file_path)
         if not file_exists:
             _LOGGER.error("DomoLink-BackUp: Le fichier spécifié n'existe pas : %s", file_path)
