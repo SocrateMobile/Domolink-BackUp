@@ -6,7 +6,7 @@
 
 
 [![HACS Compatible](https://img.shields.io/badge/HACS-Custom-blue.svg)](https://github.com/SocrateMobile/Domolink-BackUp)
-[![Version](https://img.shields.io/badge/version-1.5.23-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
+[![Version](https://img.shields.io/badge/version-1.5.25-green.svg)](https://github.com/SocrateMobile/Domolink-BackUp/releases)
 [![License](https://img.shields.io/badge/license-MIT-orange.svg)](LICENSE)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Socrate-FFDD00?logo=buy-me-a-coffee&logoColor=000000)](https://buymeacoffee.com/Socrate)
 

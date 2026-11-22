@@ -110,8 +110,6 @@ def _get_ftp_connection(
     """Create and authenticate a configured FTP or FTPS connection."""
     if use_tls:
         ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
         ftp = ReusedSessionFTP_TLS(context=ctx, timeout=timeout)
         ftp.encoding = "utf-8"
         ftp.connect(host, port)
@@ -367,8 +365,7 @@ class DomoLinkStorageEngine:
     def _get_webdav_verify_ssl(self, url: str, cfg: dict[str, Any] | None = None) -> bool:
         """Return whether SSL certificate should be strictly verified for WebDAV."""
         c = cfg or self.config
-        is_local = any(k in str(url) for k in ("192.168.", "10.", "127.0.0.1", "localhost", ".local"))
-        return bool(c.get(CONF_WEBDAV_VERIFY_SSL, False if is_local else True))
+        return bool(c.get(CONF_WEBDAV_VERIFY_SSL, True))
 
     def _get_ftp_path(self, cfg: dict[str, Any] | None = None) -> str:
         """Return sanitized FTP target directory path."""
@@ -475,8 +472,6 @@ class DomoLinkStorageEngine:
                 log_step(f"Connexion réseau TCP vers {host}:{port}...")
                 if use_tls:
                     ctx = ssl.create_default_context()
-                    ctx.check_hostname = False
-                    ctx.verify_mode = ssl.CERT_NONE
                     ftp = ReusedSessionFTP_TLS(context=ctx, timeout=15)
                     ftp.encoding = "utf-8"
                     ftp.connect(host, port)
@@ -1421,7 +1416,13 @@ class DomoLinkStorageEngine:
             return await self._async_download_webdav_stream(filename)
         elif proto == PROTO_LOCAL_SHARE:
             dest_dir = self.config.get(CONF_LOCAL_SHARE_PATH, DEFAULT_LOCAL_SHARE_PATH)
-            local_path = os.path.join(dest_dir, filename)
+            safe_name = os.path.basename(filename)
+            if not safe_name or safe_name != filename:
+                raise FileNotFoundError(f"Nom de fichier invalide : {filename}")
+            real_base = os.path.realpath(dest_dir)
+            local_path = os.path.realpath(os.path.join(real_base, safe_name))
+            if not local_path.startswith(real_base + os.sep):
+                raise FileNotFoundError(f"Chemin de sauvegarde non autorisé : {filename}")
             local_exists = await self.hass.async_add_executor_job(os.path.exists, local_path)
             if not local_exists:
                 raise FileNotFoundError(f"Sauvegarde locale introuvable : {local_path}")
@@ -1729,7 +1730,15 @@ class DomoLinkStorageEngine:
 
     async def _async_delete_local_share(self, filename: str) -> bool:
         dest_dir = self.config.get(CONF_LOCAL_SHARE_PATH, DEFAULT_LOCAL_SHARE_PATH)
-        target = os.path.join(dest_dir, filename)
+        safe_name = os.path.basename(filename)
+        if not safe_name or safe_name != filename:
+            _LOGGER.error("DomoLink-BackUp: Nom de fichier local invalide (Path Traversal bloqué) : %s", filename)
+            return False
+        real_base = os.path.realpath(dest_dir)
+        target = os.path.realpath(os.path.join(real_base, safe_name))
+        if not target.startswith(real_base + os.sep):
+            _LOGGER.error("DomoLink-BackUp: Chemin de suppression hors dossier autorisé : %s", filename)
+            return False
 
         def _sync_del():
             try:

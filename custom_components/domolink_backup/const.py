@@ -1,19 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime
-import json
-import os
 import re
 
 DOMAIN = "domolink_backup"
 NAME = "DomoLink-BackUp"
 DEFAULT_NAME = NAME
-_MANIFEST_PATH = os.path.join(os.path.dirname(__file__), "manifest.json")
-try:
-    with open(_MANIFEST_PATH, "r", encoding="utf-8") as _f:
-        VERSION = json.load(_f).get("version", "1.5.22")
-except Exception:
-    VERSION = "1.5.22"
+VERSION = "1.5.25"
 
 # Backup and Restore Types
 BACKUP_TYPE_FULL = "full"

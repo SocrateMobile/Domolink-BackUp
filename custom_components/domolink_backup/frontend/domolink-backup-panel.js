@@ -766,19 +766,13 @@ class DomoLinkBackupPanel extends HTMLElement {
     `;
     this.shadowRoot.appendChild(overlay);
 
-    // Call service or WS
+    // Delegate update installation to Home Assistant's standard update entity (managed by HACS)
     try {
       if (this._hass && this._hass.callService) {
-        this._hass.callService("domolink_backup", "install_update", { backup: true });
-      } else if (this._hass && this._hass.callWS) {
-        this._hass.callWS({ type: "domolink_backup/install_update", backup: true });
-      }
-    } catch (err) {
-      try {
-        this._hass.callWS({ type: "domolink_backup/install_update", backup: true });
-      } catch (e2) {
         this._hass.callService("update", "install", { entity_id: "update.domolink_backup" });
       }
+    } catch (err) {
+      // Ignore if update entity is not present
     }
 
     const progressBar = overlay.querySelector("#update-progress-bar");
